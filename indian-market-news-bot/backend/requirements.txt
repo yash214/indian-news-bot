@@ -3,3 +3,4 @@ feedparser>=6.0
 requests>=2.31
 certifi>=2024.0
 yfinance>=0.2
+gunicorn
