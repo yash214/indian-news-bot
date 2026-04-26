@@ -3245,6 +3245,6 @@ if __name__ == "__main__":
         print("  Upstox requested but UPSTOX_ACCESS_TOKEN is missing; using NSE fallback")
     print("  Ctrl+C to stop")
     print("=" * 60)
-
+    port = int(os.environ.get("PORT", "10000"))
     # Do not auto-open a browser here; macOS may block it with Permission denied.
-    app.run(host="127.0.0.1", port=port, debug=False, use_reloader=False, threaded=True)
+    app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False, threaded=True)
