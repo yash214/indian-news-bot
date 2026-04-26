@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>India Market Desk</title>
+<link rel="stylesheet" href="/assets/styles.css">
+</head>
+<body>
+<div id="ticker-bar">
+  <span class="live-badge">LIVE</span>
+  <div id="tick-wrap" style="display:flex;gap:24px;align-items:flex-start;">
+    <div class="t-skeleton"></div><div class="t-skeleton"></div><div class="t-skeleton"></div>
+  </div>
+  <div id="mkt-status"></div>
+</div>
+<header>
+  <h1>&#127470;&#127475; India Market Desk</h1>
+  <input id="search" type="text" placeholder="&#128269; Search news, sector, source, publisher…" oninput="render()">
+  <div class="header-right">
+    <button id="notif-btn" class="icon-btn" onclick="enableNotifications()" title="Enable push alerts for high-impact news">&#128276;</button>
+    <div class="refresh-wrap">
+      <span class="refresh-label">Refresh</span>
+      <select id="refresh-window" onchange="setRefreshWindowSelect(this.value)">
+        <option value="60">1m</option>
+        <option value="120">2m</option>
+        <option value="300" selected>5m</option>
+        <option value="600">10m</option>
+        <option value="900">15m</option>
+      </select>
+    </div>
+    <div id="refresh-pulse"></div>
+    <span id="updated">Connecting…</span>
+    <span id="next-refresh"></span>
+  </div>
+</header>
+<div class="main">
+  <div class="news-panel">
+    <div class="sort-bar">
+      <span class="sort-lbl">Sort:</span>
+      <button class="sort-btn active" onclick="setSort('newest',this)">Newest</button>
+      <button class="sort-btn" onclick="setSort('impact',this)">&#9889; Impact</button>
+      <button class="sort-btn" onclick="setSort('watchlist',this)">&#9733; Watchlist</button>
+      <span class="bar-sep">|</span>
+      <button class="filt-btn" id="bull-filt" onclick="toggleSentFilter('bullish')">&#9650; Bullish</button>
+      <button class="filt-btn" id="bear-filt" onclick="toggleSentFilter('bearish')">&#9660; Bearish</button>
+      <button class="filt-btn" id="bm-filt" onclick="toggleBookmarksOnly()">&#9733; Saved</button>
+      <span class="bar-sep">|</span>
+      <span class="sort-lbl">Scope:</span>
+      <button class="filt-btn scope-btn scope-on" onclick="setScopeFilter('all',this)">All</button>
+      <button class="filt-btn scope-btn" onclick="setScopeFilter('local',this)">Local</button>
+      <button class="filt-btn scope-btn" onclick="setScopeFilter('global',this)">Global</button>
+      <span class="bar-sep">|</span>
+      <span class="sort-lbl">Time:</span>
+      <button class="filt-btn time-btn time-on" onclick="setTimeFilter(null,this)">All</button>
+      <button class="filt-btn time-btn" onclick="setTimeFilter(1,this)">1h</button>
+      <button class="filt-btn time-btn" onclick="setTimeFilter(4,this)">4h</button>
+      <button class="filt-btn time-btn" onclick="setTimeFilter(8,this)">8h</button>
+      <button class="filt-btn time-btn" onclick="setTimeFilter(12,this)">12h</button>
+      <button class="filt-btn time-btn" onclick="setTimeFilter(24,this)">24h</button>
+    </div>
+    <div class="system-status-bar" id="system-status-bar"></div>
+    <div id="filter-badge">
+      <span>&#128204; Sector: <strong id="f-name"></strong></span>
+      <button class="clr-btn" onclick="clearFilter()">&#10005; Clear</button>
+    </div>
+    <div id="feed"><div class="loading"><div class="spinner"></div><div>Fetching Indian market news…</div></div></div>
+    <div id="no-results">No articles match your current filters.</div>
+  </div>
+  <div class="sidebar">
+    <div class="tab-bar">
+      <button class="tab-btn active" onclick="switchTab('analytics',this)">Analytics</button>
+      <button class="tab-btn" onclick="switchTab('derivatives',this)">Derivatives</button>
+      <button class="tab-btn" onclick="switchTab('watchlist',this)">Watchlist</button>
+      <button class="tab-btn" onclick="switchTab('portfolio',this)">Portfolio</button>
+    </div>
+    <div id="tab-analytics" class="tab-pane active">
+      <div class="pane-inner">
+        <div class="panel-band">
+          <div class="panel-title">Market Dashboard</div>
+          <div class="overview-grid" id="overview-grid"></div>
+        </div>
+        <div class="panel-band">
+          <div class="panel-title">Trade Desk</div>
+          <div class="desk-list" id="desk-alerts"></div>
+        </div>
+        <div class="panel-band">
+          <div class="panel-head">
+            <div class="panel-title" style="margin:0;">Sector Heatmap<span class="panel-sub">(click to filter news)</span></div>
+            <span id="breadth-pill" class="breadth-pill breadth-neut"></span>
+          </div>
+          <div class="heatmap" id="heatmap"></div>
+        </div>
+        <div class="panel-band">
+          <div class="panel-title">Sector Rotation</div>
+          <div class="board-list" id="sector-board"></div>
+        </div>
+        <div class="panel-band">
+          <div class="panel-title">Key Levels</div>
+          <div class="levels-list" id="key-levels"></div>
+        </div>
+      </div>
+    </div>
+    <div id="tab-derivatives" class="tab-pane">
+      <div class="pane-inner">
+        <div class="panel-band">
+          <div class="panel-title">Prediction Engine</div>
+          <div class="overview-grid" id="deriv-prediction-grid"></div>
+        </div>
+        <div class="panel-band">
+          <div class="panel-title">Risk Flags</div>
+          <div class="desk-list" id="deriv-risk-list"></div>
+        </div>
+        <div class="panel-band">
+          <div class="panel-title">Score Breakdown</div>
+          <div class="board-list" id="deriv-score-board"></div>
+        </div>
+        <div class="panel-band">
+          <div class="panel-title">Trade Scenarios</div>
+          <div class="levels-list" id="deriv-scenario-list"></div>
+        </div>
+        <div class="panel-band">
+          <div class="panel-title">Positioning Context</div>
+          <div class="desk-list" id="deriv-context-list"></div>
+        </div>
+      </div>
+    </div>
+    <div id="tab-watchlist" class="tab-pane">
+      <div class="pane-inner">
+        <div class="panel-band">
+          <div class="panel-title">&#128200; Ticker Strip<span class="panel-sub">(edit the live bar)</span></div>
+          <div class="wl-chips" id="ticker-chips"></div>
+          <div class="suggest-wrap">
+            <div class="wl-row">
+              <input id="ticker-inp" placeholder="e.g. ICICIBANK" maxlength="20" oninput="handleSuggestInput('ticker')" onfocus="handleSuggestInput('ticker')" onblur="hideSuggestMenu('ticker',150)" onkeydown="handleSuggestKey(event,'ticker')">
+              <button id="ticker-add" onclick="addTicker()">&#65291;</button>
+            </div>
+            <div class="suggest-menu" id="ticker-suggest"></div>
+          </div>
+        </div>
+        <div class="panel-band">
+          <div class="panel-title">&#9733; Watchlist<span class="panel-sub">(saved locally)</span></div>
+          <div class="wl-chips" id="wl-chips"></div>
+          <div class="suggest-wrap">
+            <div class="wl-row">
+              <input id="wl-inp" placeholder="e.g. RELIANCE" maxlength="20" oninput="handleSuggestInput('watchlist')" onfocus="handleSuggestInput('watchlist')" onblur="hideSuggestMenu('watchlist',150)" onkeydown="handleSuggestKey(event,'watchlist')">
+              <button id="wl-add" onclick="addWL()">&#65291;</button>
+            </div>
+            <div class="suggest-menu" id="watchlist-suggest"></div>
+          </div>
+        </div>
+        <div class="panel-band" style="flex:1;">
+          <div class="panel-title">Trade Radar</div>
+          <div class="watch-signals" id="watchlist-signals"></div>
+        </div>
+      </div>
+    </div>
+    <div id="tab-portfolio" class="tab-pane">
+      <div class="pane-inner">
+        <div class="panel-band">
+          <div class="panel-title">&#8377; Portfolio<span class="panel-sub">(saved locally)</span></div>
+          <div class="port-add-row">
+            <input id="port-sym" placeholder="INFY" maxlength="15" onkeydown="if(event.key==='Enter')addPortfolio()">
+            <input id="port-qty" type="number" placeholder="Qty" min="1" step="1">
+            <input id="port-buy" type="number" placeholder="Buy Rs" min="0" step="0.01">
+            <button class="port-add-btn" onclick="addPortfolio()">&#65291;</button>
+          </div>
+          <div class="port-list" id="port-list"></div>
+          <div class="port-total" id="port-total"></div>
+        </div>
+        <div class="panel-band">
+          <div class="panel-title">Portfolio Snapshot</div>
+          <div class="summary-grid" id="portfolio-summary"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+<div id="toast"></div>
+<script src="/assets/app.js"></script>
+</body>
+</html>
