@@ -3,6 +3,7 @@ import tempfile
 import unittest
 from unittest import mock
 from pathlib import Path
+from urllib.parse import parse_qs, urlparse
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -92,6 +93,31 @@ class NewsScoringTests(unittest.TestCase):
 
 
 class UpstoxProviderTests(unittest.TestCase):
+    def test_upstox_access_token_uses_db_fallback(self):
+        with mock.patch.dict(app.os.environ, {"UPSTOX_ACCESS_TOKEN": ""}, clear=False):
+            with mock.patch.object(app, "stored_upstox_token_record", return_value={"access_token": "db-token"}):
+                self.assertEqual(app.upstox_access_token(), "db-token")
+
+    def test_upstox_oauth_dialog_url_contains_expected_params(self):
+        with mock.patch.dict(
+            app.os.environ,
+            {
+                "UPSTOX_CLIENT_ID": "client-123",
+                "UPSTOX_CLIENT_SECRET": "secret-456",
+                "UPSTOX_REDIRECT_URI": "https://desk.example.com/api/auth/upstox/callback",
+            },
+            clear=False,
+        ):
+            url = app.upstox_oauth_dialog_url("state-xyz")
+
+        parsed = urlparse(url)
+        params = parse_qs(parsed.query)
+        self.assertEqual(parsed.path, "/v2/login/authorization/dialog")
+        self.assertEqual(params["response_type"], ["code"])
+        self.assertEqual(params["client_id"], ["client-123"])
+        self.assertEqual(params["redirect_uri"], ["https://desk.example.com/api/auth/upstox/callback"])
+        self.assertEqual(params["state"], ["state-xyz"])
+
     def test_upstox_provider_falls_back_without_token(self):
         with mock.patch.dict(app.os.environ, {"MARKET_DATA_PROVIDER": "upstox", "UPSTOX_ACCESS_TOKEN": ""}, clear=False):
             status = app.market_data_provider_status()
@@ -155,6 +181,45 @@ class UpstoxProviderTests(unittest.TestCase):
         self.assertEqual(payload["summary"]["maxCallOiStrike"], 22100.0)
         self.assertEqual(payload["summary"]["maxPutOiStrike"], 22000.0)
         self.assertEqual(payload["summary"]["flowBias"], "Call writing pressure")
+
+    def test_upstox_callback_persists_token_record(self):
+        client = app.app.test_client()
+        with mock.patch.object(app, "load_upstox_oauth_state", return_value="state-xyz"):
+            with mock.patch.object(app, "upstox_auth_token_request", return_value={"access_token": "fresh-token"}) as exchange_mock:
+                with mock.patch.object(app, "persist_upstox_token_record") as persist_mock:
+                    with mock.patch.object(app, "persist_upstox_oauth_state") as state_mock:
+                        response = client.get("/api/auth/upstox/callback?code=auth-code&state=state-xyz")
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.headers["Location"], "/")
+        exchange_mock.assert_called_once_with("auth-code")
+        persist_mock.assert_called_once()
+        state_mock.assert_called_once_with("")
+
+    def test_upstox_integration_status_reports_static_ip_config(self):
+        with mock.patch.dict(app.os.environ, {"UPSTOX_PRIMARY_IP": "1.2.3.4", "UPSTOX_SECONDARY_IP": ""}, clear=False):
+            with mock.patch.object(app, "upstox_access_token", return_value="token"):
+                status = app.upstox_integration_status()
+
+        self.assertTrue(status["staticIpConfigured"])
+        self.assertTrue(status["staticIpSyncReady"])
+        self.assertEqual(status["primaryIp"], "1.2.3.4")
+
+    def test_background_threads_are_disabled_during_unittest(self):
+        self.assertFalse(app.background_threads_enabled())
+
+    def test_start_background_workers_is_idempotent(self):
+        refresh_thread = mock.Mock()
+        ticker_thread = mock.Mock()
+        with mock.patch.object(app, "background_threads_enabled", return_value=True):
+            with mock.patch.object(app, "_background_threads_started", False):
+                with mock.patch.object(app.threading, "Thread", side_effect=[refresh_thread, ticker_thread]) as thread_ctor:
+                    self.assertTrue(app.start_background_workers())
+                    self.assertFalse(app.start_background_workers())
+
+        self.assertEqual(thread_ctor.call_count, 2)
+        refresh_thread.start.assert_called_once()
+        ticker_thread.start.assert_called_once()
 
 
 class PersistenceTests(unittest.TestCase):

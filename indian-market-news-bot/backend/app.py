@@ -26,6 +26,7 @@ import math
 import os
 import queue
 import re
+import secrets
 import sqlite3
 import sys
 import threading
@@ -35,9 +36,9 @@ from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, datetime, time as dt_time, timezone, timedelta
 from statistics import mean, pstdev
-from urllib.parse import quote_plus
+from urllib.parse import quote_plus, urlencode
 
-from flask import Flask, Response, jsonify, request, stream_with_context
+from flask import Flask, Response, jsonify, redirect, request, stream_with_context
 
 try:
     import certifi
@@ -316,9 +317,12 @@ DEFAULT_APP_STATE = {
 }
 
 BACKEND_DIR = Path(__file__).resolve().parent
-DATA_DIR = BACKEND_DIR / "data"
+DEFAULT_DATA_DIR = BACKEND_DIR / "data"
+DATA_DIR = Path(os.environ.get("MARKET_DESK_DATA_DIR", str(DEFAULT_DATA_DIR))).expanduser()
 STATE_DB_PATH = DATA_DIR / "market_desk.db"
-HOLIDAY_CALENDAR_PATH = DATA_DIR / "nse_holidays.json"
+HOLIDAY_CALENDAR_PATH = Path(
+    os.environ.get("MARKET_DESK_HOLIDAY_FILE", str(DEFAULT_DATA_DIR / "nse_holidays.json"))
+).expanduser()
 MARKET_OPEN_TIME = dt_time(hour=9, minute=15)
 MARKET_CLOSE_TIME = dt_time(hour=15, minute=30)
 PREOPEN_TICK_INTERVAL_SECONDS = 10
@@ -336,6 +340,8 @@ NSE_PROVIDER_NAME = "nse"
 UPSTOX_PROVIDER_NAME = "upstox"
 UPSTOX_DEFAULT_API_BASE = "https://api.upstox.com/v2"
 UPSTOX_QUOTE_BATCH_LIMIT = 500
+UPSTOX_AUTH_STATE_KEY = "upstox_oauth_state"
+UPSTOX_AUTH_TOKEN_KEY = "upstox_auth_token"
 
 UPSTOX_DEFAULT_INSTRUMENT_KEYS = {
     # Upstox quotes use stable instrument keys. These cover the app defaults
@@ -590,12 +596,44 @@ def requested_market_data_provider() -> str:
     return provider if provider in {NSE_PROVIDER_NAME, UPSTOX_PROVIDER_NAME} else NSE_PROVIDER_NAME
 
 
+def stored_upstox_token_record(path: Path = STATE_DB_PATH) -> dict:
+    record = db_get_json(UPSTOX_AUTH_TOKEN_KEY, default={}, path=path)
+    return record if isinstance(record, dict) else {}
+
+
+def persist_upstox_token_record(record: dict, path: Path = STATE_DB_PATH) -> None:
+    db_set_json(UPSTOX_AUTH_TOKEN_KEY, record, path=path)
+
+
+def clear_upstox_token_record(path: Path = STATE_DB_PATH) -> None:
+    db_set_json(UPSTOX_AUTH_TOKEN_KEY, {}, path=path)
+
+
 def upstox_access_token() -> str:
-    return os.environ.get("UPSTOX_ACCESS_TOKEN", "").strip()
+    token = os.environ.get("UPSTOX_ACCESS_TOKEN", "").strip()
+    if token:
+        return token
+    return str(stored_upstox_token_record().get("access_token", "")).strip()
 
 
 def upstox_api_base() -> str:
     return os.environ.get("UPSTOX_API_BASE", UPSTOX_DEFAULT_API_BASE).strip().rstrip("/")
+
+
+def upstox_client_id() -> str:
+    return os.environ.get("UPSTOX_CLIENT_ID", "").strip()
+
+
+def upstox_client_secret() -> str:
+    return os.environ.get("UPSTOX_CLIENT_SECRET", "").strip()
+
+
+def upstox_redirect_uri() -> str:
+    return os.environ.get("UPSTOX_REDIRECT_URI", "").strip()
+
+
+def upstox_auth_configured() -> bool:
+    return bool(upstox_client_id() and upstox_client_secret() and upstox_redirect_uri())
 
 
 def upstox_fallback_enabled() -> bool:
@@ -603,20 +641,40 @@ def upstox_fallback_enabled() -> bool:
     return raw not in {"0", "false", "no", "off"}
 
 
-def active_market_data_provider() -> str:
-    if requested_market_data_provider() == UPSTOX_PROVIDER_NAME and upstox_access_token():
-        return UPSTOX_PROVIDER_NAME
-    return NSE_PROVIDER_NAME
+def upstox_oauth_dialog_url(state: str) -> str:
+    if not upstox_auth_configured():
+        raise RuntimeError("Upstox OAuth env vars are not configured")
+    return (
+        f"{upstox_api_base()}/login/authorization/dialog?"
+        + urlencode(
+            {
+                "response_type": "code",
+                "client_id": upstox_client_id(),
+                "redirect_uri": upstox_redirect_uri(),
+                "state": state,
+            }
+        )
+    )
 
 
 def market_data_provider_status() -> dict:
     requested = requested_market_data_provider()
     configured = bool(upstox_access_token())
     active = active_market_data_provider()
+    token_record = stored_upstox_token_record()
+    token_source = (
+        "env"
+        if os.environ.get("UPSTOX_ACCESS_TOKEN", "").strip()
+        else "db"
+        if token_record.get("access_token")
+        else "none"
+    )
     return {
         "requested": requested,
         "active": active,
         "upstoxConfigured": configured,
+        "upstoxAuthConfigured": upstox_auth_configured(),
+        "upstoxTokenSource": token_source,
         "fallbackToNse": upstox_fallback_enabled(),
         "reason": (
             "Upstox access token missing; using NSE fallback"
@@ -626,6 +684,12 @@ def market_data_provider_status() -> dict:
             else "NSE public endpoints enabled"
         ),
     }
+
+
+def active_market_data_provider() -> str:
+    if requested_market_data_provider() == UPSTOX_PROVIDER_NAME and upstox_access_token():
+        return UPSTOX_PROVIDER_NAME
+    return NSE_PROVIDER_NAME
 
 
 def ticker_refresh_interval(status: dict | None = None) -> int:
@@ -1269,6 +1333,72 @@ def persist_refresh_settings(seconds: int, path: Path = STATE_DB_PATH) -> None:
     db_set_json("settings", {"refreshInterval": seconds}, path=path)
 
 
+def persist_upstox_oauth_state(state: str, path: Path = STATE_DB_PATH) -> None:
+    db_set_json(
+        UPSTOX_AUTH_STATE_KEY,
+        {"state": state, "createdAt": datetime.now(timezone.utc).isoformat()},
+        path=path,
+    )
+
+
+def load_upstox_oauth_state(path: Path = STATE_DB_PATH) -> str:
+    record = db_get_json(UPSTOX_AUTH_STATE_KEY, default={}, path=path)
+    if not isinstance(record, dict):
+        return ""
+    return str(record.get("state", "")).strip()
+
+
+def upstox_token_preview(token: str) -> str:
+    token = (token or "").strip()
+    if len(token) <= 8:
+        return token
+    return f"{token[:4]}...{token[-4:]}"
+
+
+def upstox_integration_status() -> dict:
+    token = upstox_access_token()
+    record = stored_upstox_token_record()
+    provider = market_data_provider_status()
+    login_path = "/api/auth/upstox/login" if upstox_auth_configured() else None
+    return {
+        "provider": provider,
+        "authConfigured": upstox_auth_configured(),
+        "redirectUri": upstox_redirect_uri() or None,
+        "loginPath": login_path,
+        "connected": bool(token),
+        "tokenPreview": upstox_token_preview(token) if token else None,
+        "tokenSource": provider["upstoxTokenSource"],
+        "primaryIp": os.environ.get("UPSTOX_PRIMARY_IP", "").strip() or None,
+        "secondaryIp": os.environ.get("UPSTOX_SECONDARY_IP", "").strip() or None,
+        "staticIpConfigured": bool(os.environ.get("UPSTOX_PRIMARY_IP", "").strip()),
+        "staticIpSyncReady": bool(os.environ.get("UPSTOX_PRIMARY_IP", "").strip() and token),
+        "storedAt": record.get("issued_at") if isinstance(record, dict) else None,
+        "dataDir": str(DATA_DIR),
+    }
+
+
+def sync_upstox_static_ips(primary_ip: str | None = None, secondary_ip: str | None = None) -> dict:
+    primary = (primary_ip or os.environ.get("UPSTOX_PRIMARY_IP", "")).strip()
+    secondary = (secondary_ip or os.environ.get("UPSTOX_SECONDARY_IP", "")).strip()
+    if not primary:
+        raise RuntimeError("UPSTOX_PRIMARY_IP is not configured")
+    payload = {"primary_ip": primary}
+    if secondary:
+        payload["secondary_ip"] = secondary
+    response = http_session().put(
+        f"{upstox_api_base()}/user/ip",
+        headers=upstox_headers(),
+        json=payload,
+        timeout=12,
+    )
+    response.raise_for_status()
+    body = response.json()
+    data = body.get("data") or {}
+    if data.get("access_tokens_invalidated") and not os.environ.get("UPSTOX_ACCESS_TOKEN", "").strip():
+        clear_upstox_token_record()
+    return body
+
+
 def load_holiday_calendar(path: Path = HOLIDAY_CALENDAR_PATH) -> dict[str, dict[str, str]]:
     if not path.exists():
         return {}
@@ -1602,6 +1732,30 @@ def initialize_runtime_state() -> None:
         _news_refresh_seconds = refresh_seconds
 
 
+_background_threads_started = False
+_background_threads_lock = threading.Lock()
+
+
+def background_threads_enabled() -> bool:
+    raw = os.environ.get("MARKET_DESK_DISABLE_THREADS", "").strip().lower()
+    if raw in {"1", "true", "yes", "on"}:
+        return False
+    return "unittest" not in sys.modules and "pytest" not in sys.modules
+
+
+def start_background_workers() -> bool:
+    global _background_threads_started
+    if not background_threads_enabled():
+        return False
+    with _background_threads_lock:
+        if _background_threads_started:
+            return False
+        threading.Thread(target=refresh_loop, daemon=True, name="market-desk-refresh").start()
+        threading.Thread(target=ticker_loop, daemon=True, name="market-desk-ticker").start()
+        _background_threads_started = True
+        return True
+
+
 # ── Network helpers ────────────────────────────────────────────────────────
 def _get_feed(url: str) -> bytes:
     headers = {
@@ -1778,6 +1932,32 @@ def upstox_headers() -> dict[str, str]:
         "Content-Type": "application/json",
         "Authorization": f"Bearer {token}",
     }
+
+
+def upstox_auth_token_request(code: str) -> dict:
+    if not upstox_auth_configured():
+        raise RuntimeError("Upstox OAuth env vars are not configured")
+    response = http_session().post(
+        f"{upstox_api_base()}/login/authorization/token",
+        headers={
+            "Accept": "application/json",
+            "Content-Type": "application/x-www-form-urlencoded",
+        },
+        data={
+            "code": code,
+            "client_id": upstox_client_id(),
+            "client_secret": upstox_client_secret(),
+            "redirect_uri": upstox_redirect_uri(),
+            "grant_type": "authorization_code",
+        },
+        timeout=12,
+    )
+    response.raise_for_status()
+    payload = response.json()
+    token = str(payload.get("access_token") or payload.get("data", {}).get("access_token") or "").strip()
+    if not token:
+        raise RuntimeError("Upstox token exchange did not return an access token")
+    return payload
 
 
 def parse_upstox_timestamp(value, default_ts: float) -> float:
@@ -3152,6 +3332,74 @@ def api_derivatives_option_chain():
     return jsonify(payload)
 
 
+@app.route("/api/integrations/upstox/status")
+def api_upstox_status():
+    return jsonify(upstox_integration_status())
+
+
+@app.route("/api/auth/upstox/login")
+def api_upstox_login():
+    if not upstox_auth_configured():
+        return jsonify({"error": "Upstox OAuth env vars are not configured"}), 400
+    state = secrets.token_urlsafe(24)
+    persist_upstox_oauth_state(state)
+    return redirect(upstox_oauth_dialog_url(state))
+
+
+@app.route("/api/auth/upstox/callback")
+def api_upstox_callback():
+    error = request.args.get("error", "").strip()
+    if error:
+        return jsonify({"error": error, "provider": "Upstox"}), 400
+    code = request.args.get("code", "").strip()
+    state = request.args.get("state", "").strip()
+    expected_state = load_upstox_oauth_state()
+    if not code:
+        return jsonify({"error": "Missing Upstox authorization code", "provider": "Upstox"}), 400
+    if expected_state and state != expected_state:
+        return jsonify({"error": "Invalid Upstox OAuth state", "provider": "Upstox"}), 400
+    try:
+        payload = upstox_auth_token_request(code)
+    except requests.HTTPError as exc:
+        status_code = exc.response.status_code if exc.response is not None else 502
+        return jsonify({"error": "Upstox token exchange failed", "provider": "Upstox"}), status_code
+    except Exception as exc:
+        return jsonify({"error": str(exc), "provider": "Upstox"}), 502
+
+    token = str(payload.get("access_token") or payload.get("data", {}).get("access_token") or "").strip()
+    persist_upstox_token_record(
+        {
+            "access_token": token,
+            "issued_at": datetime.now(timezone.utc).isoformat(),
+            "provider": "upstox_oauth",
+        }
+    )
+    persist_upstox_oauth_state("")
+    return redirect("/")
+
+
+@app.route("/api/auth/upstox/disconnect", methods=["POST"])
+def api_upstox_disconnect():
+    if os.environ.get("UPSTOX_ACCESS_TOKEN", "").strip():
+        return jsonify({"error": "UPSTOX_ACCESS_TOKEN is set via environment variable; remove it from your server environment to disconnect."}), 400
+    clear_upstox_token_record()
+    return jsonify({"status": "ok", "connected": False})
+
+
+@app.route("/api/auth/upstox/static-ips/sync", methods=["POST"])
+def api_upstox_static_ips_sync():
+    try:
+        payload = sync_upstox_static_ips()
+    except RuntimeError as exc:
+        return jsonify({"error": str(exc), "provider": "Upstox"}), 400
+    except requests.HTTPError as exc:
+        status_code = exc.response.status_code if exc.response is not None else 502
+        return jsonify({"error": "Upstox static IP update failed", "provider": "Upstox"}), status_code
+    except Exception as exc:
+        return jsonify({"error": str(exc), "provider": "Upstox"}), 502
+    return jsonify(payload)
+
+
 @app.route("/api/settings/refresh", methods=["GET", "POST"])
 def api_settings_refresh():
     if request.method == "POST":
@@ -3181,6 +3429,7 @@ def api_health():
     return jsonify({
         "status": status,
         "dataProvider": market_data_provider_status(),
+        "upstox": upstox_integration_status(),
         "marketStatus": market_status,
         "newsCount": news_count,
         "tickerCount": ticker_count,
@@ -3227,13 +3476,10 @@ def index():
 
 # ── Frontend entrypoint ────────────────────────────────────────────────────
 initialize_runtime_state()
+start_background_workers()
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", "9090"))
-    t1 = threading.Thread(target=refresh_loop, daemon=True)
-    t1.start()
-    t2 = threading.Thread(target=ticker_loop, daemon=True)
-    t2.start()
 
     print("=" * 60)
     print("  India Market Desk")
@@ -3245,6 +3491,5 @@ if __name__ == "__main__":
         print("  Upstox requested but UPSTOX_ACCESS_TOKEN is missing; using NSE fallback")
     print("  Ctrl+C to stop")
     print("=" * 60)
-    port = int(os.environ.get("PORT", "10000"))
     # Do not auto-open a browser here; macOS may block it with Permission denied.
     app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False, threaded=True)
