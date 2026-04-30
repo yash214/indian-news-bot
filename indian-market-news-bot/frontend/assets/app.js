@@ -3,6 +3,7 @@ let allArticles = [];
 let sortMode = 'newest';
 let sentFilter = null;
 let bookmarksOnly = false;
+let aiSummaryOnly = false;
 let sectorFilter = null;
 let scopeFilter = 'all';
 let timeFilterHours = null;
@@ -30,6 +31,9 @@ let dataProvider = null;
 let lastSnapshotAt = null;
 let refreshInterval = 300;
 let allowedRefreshWindows = [60, 120, 300, 600, 900];
+let aiSummaryProgress = null;
+let aiSummaryPollTimer;
+const AI_SUMMARY_POLL_INTERVAL_MS = 5000;
 const DEFAULT_TRACKED_TICKERS = ['INFY', 'HCLTECH', 'WIPRO', 'TCS', 'RELIANCE'];
 const DEFAULT_WATCHLIST = ['INFY', 'HCLTECH', 'WIPRO', 'RELIANCE'];
 const FIXED_TICKER_LABELS = ['Nifty 50', 'Nifty Bank', 'Nifty Midcap', 'Nifty Smallcap', 'VIX', 'Nifty IT', 'Gold', 'USD/INR', 'Crude Oil', 'Brent Crude'];
@@ -199,6 +203,39 @@ async function fetchAppState() {
   }
 }
 
+function aiSummaryProgressLabel(progress = aiSummaryProgress) {
+  if (!progress || !progress.total) return null;
+  const complete = Number(progress.analysisComplete ?? progress.complete ?? 0);
+  const total = Number(progress.total || 0);
+  const queued = Number(progress.queued || 0);
+  const inflight = Number(progress.inflight || 0);
+  const activeWork = queued + inflight;
+  const done = total > 0 && complete >= total;
+  return {
+    className: done ? 'sys-ok' : activeWork > 0 ? 'sys-warn' : 'sys-muted',
+    text: `AI analysis ${complete}/${total}${done ? '' : activeWork > 0 ? ` · ${activeWork} queued` : ''}`,
+  };
+}
+
+function patchAiSummaryProgressPill(progress = aiSummaryProgress) {
+  const bar = document.getElementById('system-status-bar');
+  if (!bar) return;
+  const label = aiSummaryProgressLabel(progress);
+  const existing = bar.querySelector('[data-ai-summary-progress="1"]');
+  if (!label) {
+    if (existing) existing.remove();
+    return;
+  }
+  const pill = existing || document.createElement('span');
+  pill.dataset.aiSummaryProgress = '1';
+  pill.className = `sys-pill ${label.className}`;
+  pill.textContent = label.text;
+  if (progress && (progress.provider || progress.model)) {
+    pill.title = `AI provider: ${progress.provider || 'unknown'} · model: ${progress.model || 'unknown'}`;
+  }
+  if (!existing) bar.appendChild(pill);
+}
+
 function renderMarketStatus() {
   const tickerStatus = document.getElementById('mkt-status');
   const bar = document.getElementById('system-status-bar');
@@ -229,6 +266,12 @@ function renderMarketStatus() {
     const failedTitle = failed.map(([src, s]) => `${cleanFeedLabel(src)}: ${s.error || 'Feed unavailable'}`).join('\n');
     const sourceLabel = failed.length ? `Sources ${healthy.length}/${feedEntries.length}` : `${healthy.length} sources active`;
     pills.push(`<span class="sys-pill ${failed.length ? 'sys-warn' : 'sys-ok'}" title="${escapeHtml(failed.length ? failedTitle : healthyTitle)}">${escapeHtml(sourceLabel)}</span>`);
+  }
+  if (aiSummaryProgress && aiSummaryProgress.total) {
+    const label = aiSummaryProgressLabel();
+    if (label) {
+      pills.push(`<span class="sys-pill ${label.className}" data-ai-summary-progress="1">${escapeHtml(label.text)}</span>`);
+    }
   }
   if (marketStatus.tickerAgeSeconds !== null && marketStatus.tickerAgeSeconds !== undefined) {
     const tickClass = marketStatus.tickersStale ? 'sys-warn' : 'sys-ok';
@@ -273,6 +316,12 @@ function toggleSentFilter(s) {
 function toggleBookmarksOnly() {
   bookmarksOnly = !bookmarksOnly;
   document.getElementById('bm-filt').className = 'filt-btn' + (bookmarksOnly ? ' bm-on' : '');
+  render();
+}
+
+function toggleAiSummaryOnly() {
+  aiSummaryOnly = !aiSummaryOnly;
+  document.getElementById('ai-filt').className = 'filt-btn' + (aiSummaryOnly ? ' ai-on' : '');
   render();
 }
 
@@ -323,6 +372,10 @@ function isWL(a) {
   return false;
 }
 
+function articleHasAiSummary(a) {
+  return a.summarySource === 'ai' && String(a.summary || '').trim().length > 0;
+}
+
 function applySort(arr) {
   const a = [...arr];
   if (sortMode === 'newest') return a.sort((x, y) => y.ts - x.ts);
@@ -340,6 +393,7 @@ function filteredArticles(source, opts = {}) {
     includeScope = true,
     includeSent = true,
     includeBookmarks = true,
+    includeAiSummary = true,
     includeSearch = true,
     includeTime = true,
   } = opts;
@@ -353,6 +407,7 @@ function filteredArticles(source, opts = {}) {
   if (includeScope && scopeFilter !== 'all') arts = arts.filter(a => (a.scope || 'local') === scopeFilter);
   if (includeSent && sentFilter) arts = arts.filter(a => a.sentiment.label === sentFilter);
   if (includeBookmarks && bookmarksOnly) arts = arts.filter(a => bookmarks.has(a.id));
+  if (includeAiSummary && aiSummaryOnly) arts = arts.filter(articleHasAiSummary);
   if (includeSearch && q) arts = arts.filter(a =>
     a.title.toLowerCase().includes(q) ||
     a.summary.toLowerCase().includes(q) ||
@@ -720,7 +775,7 @@ function removePortfolio(sym) {
 
 function hmData() {
   const m = {};
-  for (const a of filteredArticles(allArticles, { includeSector: false, includeSent: false, includeBookmarks: false, includeSearch: false })) {
+  for (const a of filteredArticles(allArticles, { includeSector: false, includeSent: false, includeBookmarks: false, includeAiSummary: false, includeSearch: false })) {
     const s = a.sector;
     if (!m[s]) m[s] = { count: 0, bull: 0, bear: 0 };
     m[s].count++;
@@ -1011,23 +1066,78 @@ function renderAnalytics() {
 function impCls(n) { return n >= 7 ? 'imp-hi' : n >= 4 ? 'imp-md' : 'imp-lo'; }
 function sentBadge(s) { if (s === 'bullish') return ['b-bull', '▲ Bullish']; if (s === 'bearish') return ['b-bear', '▼ Bearish']; return ['b-neut', '— Neutral']; }
 
+function aiSummarySourceBadge(a) {
+  if (!articleHasAiSummary(a)) return '';
+  const analysis = a.aiAnalysis || {};
+  const textSource = String(analysis.textSource || '').toLowerCase();
+  const inputChars = Number(analysis.inputChars || 0);
+  const title = inputChars > 0 ? `AI used ${inputChars.toLocaleString()} characters from ${textSource || 'unknown source'}` : 'AI summary source';
+  if (textSource === 'article-page') {
+    return `<span class="badge b-ai-full" title="${escapeHtml(title)}">Full Body</span>`;
+  }
+  if (textSource === 'rss-feed') {
+    return `<span class="badge b-ai-rss" title="${escapeHtml(title)}">RSS Feed</span>`;
+  }
+  return '<span class="badge b-ai-src" title="AI summary source unknown">AI Source?</span>';
+}
+
+function cardBadgesHTML(a) {
+  const hasAiSummary = articleHasAiSummary(a);
+  const [bCls, bTxt] = sentBadge(a.sentiment && a.sentiment.label);
+  const scope = a.scope === 'global' ? 'Global' : 'Local';
+  const scopeBadgeClass = a.scope === 'global' ? 'b-global' : 'b-local';
+  return `<span class="badge ${scopeBadgeClass}">${scope}</span><span class="badge b-sector">${escapeHtml(a.sector || 'General')}</span>${hasAiSummary ? '<span class="badge b-ai">AI Summary</span>' : ''}${aiSummarySourceBadge(a)}<span class="badge ${bCls}">${bTxt}</span>`;
+}
+
+function summaryHTML(a, hasAiSummary = false) {
+  const text = articleSummaryText(a);
+  if (!text) return '<div class="card-summary"><em style="opacity:.5">No summary.</em></div>';
+  return `<div class="summary-block"><div class="card-summary${hasAiSummary ? ' card-summary-ai' : ''}">${escapeHtml(text)}</div></div>`;
+}
+
+function articleSummaryText(a) {
+  return String(a.summary || '').replace(/\s+/g, ' ').trim();
+}
+
+function articleCardStableSignature(a) {
+  return JSON.stringify([
+    a.title,
+    a.source,
+    a.feed,
+    a.published,
+    a.ts,
+    a.scope,
+    a.sector,
+    a.impact,
+    a.link,
+    a.sentiment && a.sentiment.label,
+    bookmarks.has(a.id),
+    isWL(a),
+  ]);
+}
+
+function applyCardMetadata(node, article) {
+  if (!node) return;
+  node.dataset.articleStableSignature = articleCardStableSignature(article);
+  node.dataset.summaryText = articleSummaryText(article);
+  node.dataset.summarySource = article.summarySource || '';
+}
+
 function cardHTML(a) {
   const wl = isWL(a);
   const bm = bookmarks.has(a.id);
-  const [bCls, bTxt] = sentBadge(a.sentiment.label);
+  const hasAiSummary = articleHasAiSummary(a);
   const ic = impCls(a.impact);
   const relTime = relativeTime(a.ts);
-  const scope = a.scope === 'global' ? 'Global' : 'Local';
-  const scopeBadgeClass = a.scope === 'global' ? 'b-global' : 'b-local';
   const impactReasons = a.impactMeta && Array.isArray(a.impactMeta.reasons) ? a.impactMeta.reasons : [];
   const impactTitle = impactReasons.length ? ` title="${escapeHtml(impactReasons.join(' | '))}"` : '';
   const readBtn = a.link && a.link !== '#' ? `<a class="read-btn" href="${a.link}" target="_blank" rel="noopener noreferrer">Read &#10138;</a>` : '<span style="font-size:10px;color:var(--muted)">No link</span>';
-  return `<div class="card">
+  return `<div class="card" data-article-id="${escapeHtml(a.id)}">
     <div class="card-top">
       <div class="card-title">${wl ? '<span class="wl-tag">&#9733; WL</span>' : ''}${a.title}</div>
-      <div class="card-badges"><span class="badge ${scopeBadgeClass}">${scope}</span><span class="badge b-sector">${a.sector}</span><span class="badge ${bCls}">${bTxt}</span></div>
+      <div class="card-badges">${cardBadgesHTML(a)}</div>
     </div>
-    <div class="card-summary">${a.summary || '<em style="opacity:.5">No summary.</em>'}</div>
+    ${summaryHTML(a, hasAiSummary)}
     <div class="card-footer">
       <div class="meta"><span class="meta-src" title="${a.feed || a.source}">${a.source}</span><span class="meta-time">${a.published}${relTime ? ` · ${relTime}` : ''}</span></div>
       <div style="display:flex;align-items:center;gap:8px;">
@@ -1046,9 +1156,13 @@ function render() {
   arts = applySort(arts);
   const feed = document.getElementById('feed');
   const noRes = document.getElementById('no-results');
-  if (!arts.length) { feed.innerHTML = ''; noRes.style.display = 'block'; return; }
+  if (!arts.length) {
+    feed.replaceChildren();
+    noRes.style.display = 'block';
+    return;
+  }
   noRes.style.display = 'none';
-  feed.innerHTML = arts.map(cardHTML).join('');
+  syncFeedCards(arts);
 }
 
 function sparklineSVG(pts, w, h) {
@@ -1189,6 +1303,222 @@ async function fetchMarketSnapshot(includeHistory = false) {
 let countdownTimer;
 let firstLoad = true;
 
+function mergeAiSummaryUpdates(updates) {
+  if (!Array.isArray(updates) || !updates.length) return [];
+  const byId = new Map(allArticles.map(article => [article.id, article]));
+  const changed = [];
+  for (const update of updates) {
+    const article = byId.get(update.id);
+    if (!article || update.summarySource !== 'ai' || !String(update.summary || '').trim()) continue;
+    const before = JSON.stringify({
+      summary: article.summary || '',
+      summarySource: article.summarySource || '',
+      analysisSource: article.analysisSource || '',
+      sentiment: article.sentiment || {},
+      impact: article.impact,
+      impactMeta: article.impactMeta || {},
+      sector: article.sector || '',
+      aiAnalysis: article.aiAnalysis || {},
+    });
+    if (update.sentiment && typeof update.sentiment === 'object') article.sentiment = update.sentiment;
+    if (typeof update.impact === 'number') article.impact = update.impact;
+    if (update.impactMeta && typeof update.impactMeta === 'object') article.impactMeta = update.impactMeta;
+    if (update.sector) article.sector = update.sector;
+    if (update.aiAnalysis && typeof update.aiAnalysis === 'object') article.aiAnalysis = update.aiAnalysis;
+    if (update.analysisSource) article.analysisSource = update.analysisSource;
+    article.summary = update.summary;
+    article.summarySource = 'ai';
+    const after = JSON.stringify({
+      summary: article.summary || '',
+      summarySource: article.summarySource || '',
+      analysisSource: article.analysisSource || '',
+      sentiment: article.sentiment || {},
+      impact: article.impact,
+      impactMeta: article.impactMeta || {},
+      sector: article.sector || '',
+      aiAnalysis: article.aiAnalysis || {},
+    });
+    if (before !== after) {
+      changed.push(article);
+    }
+  }
+  return changed;
+}
+
+function articleCardSelector(articleId) {
+  if (window.CSS && typeof window.CSS.escape === 'function') {
+    return `.card[data-article-id="${window.CSS.escape(String(articleId))}"]`;
+  }
+  return `.card[data-article-id="${String(articleId).replace(/["\\]/g, '\\$&')}"]`;
+}
+
+function createCardNode(article) {
+  const template = document.createElement('template');
+  template.innerHTML = cardHTML(article).trim();
+  const node = template.content.firstElementChild;
+  applyCardMetadata(node, article);
+  return node;
+}
+
+function syncCardAiBadge(card, hasAiSummary) {
+  const badges = card.querySelector('.card-badges');
+  if (!badges) return;
+  const existing = badges.querySelector('.b-ai');
+  if (!hasAiSummary) {
+    if (existing) existing.remove();
+    return;
+  }
+  if (existing) return;
+  const badge = document.createElement('span');
+  badge.className = 'badge b-ai';
+  badge.textContent = 'AI Summary';
+  const sentimentBadge = badges.querySelector('.b-bull, .b-bear, .b-neut');
+  badges.insertBefore(badge, sentimentBadge || null);
+}
+
+function updateCardBadgeNode(card, article) {
+  const badges = card.querySelector('.card-badges');
+  if (!badges) return;
+  badges.innerHTML = cardBadgesHTML(article);
+}
+
+function updateCardImpactNode(card, article) {
+  const row = card.querySelector('.impact-row');
+  if (!row) return;
+  const impact = Number(article.impact || 0);
+  const impactReasons = article.impactMeta && Array.isArray(article.impactMeta.reasons) ? article.impactMeta.reasons : [];
+  row.className = `impact-row ${impCls(impact)}`;
+  if (impactReasons.length) row.title = impactReasons.join(' | '); else row.removeAttribute('title');
+  const fill = row.querySelector('.imp-fill');
+  if (fill) fill.style.width = `${Math.max(0, Math.min(10, impact)) * 10}%`;
+  const labels = row.querySelectorAll('.imp-lbl');
+  if (labels.length > 1) labels[1].textContent = `${impact}/10`;
+}
+
+function updateCardSummaryNode(card, article) {
+  const text = articleSummaryText(article);
+  const summary = card.querySelector('.card-summary');
+  if (!summary || !text) return false;
+  if (summary.textContent !== text) {
+    summary.textContent = text;
+  }
+  const hasAiSummary = articleHasAiSummary(article);
+  summary.classList.toggle('card-summary-ai', hasAiSummary);
+  updateCardBadgeNode(card, article);
+  card.dataset.summaryText = text;
+  card.dataset.summarySource = article.summarySource || '';
+  return true;
+}
+
+function syncExistingCardNode(card, article) {
+  const nextStableSignature = articleCardStableSignature(article);
+  if (card.dataset.articleStableSignature !== nextStableSignature) {
+    return createCardNode(article) || card;
+  }
+  updateCardSummaryNode(card, article);
+  applyCardMetadata(card, article);
+  return card;
+}
+
+function syncFeedCards(articles) {
+  const feed = document.getElementById('feed');
+  feed.querySelectorAll(':scope > :not(.card)').forEach(node => node.remove());
+  const existingById = new Map();
+  feed.querySelectorAll('.card[data-article-id]').forEach(card => {
+    existingById.set(card.dataset.articleId, card);
+  });
+
+  const expectedIds = new Set(articles.map(article => String(article.id)));
+  let cursor = feed.firstElementChild;
+  for (const article of articles) {
+    const existingNode = existingById.get(String(article.id));
+    let node = existingNode ? syncExistingCardNode(existingNode, article) : createCardNode(article);
+    if (!node) continue;
+    if (existingNode && node !== existingNode) {
+      feed.insertBefore(node, cursor === existingNode ? existingNode : cursor);
+      existingNode.remove();
+    } else if (node !== cursor) {
+      feed.insertBefore(node, cursor);
+    }
+    cursor = node.nextElementSibling;
+  }
+
+  feed.querySelectorAll('.card[data-article-id]').forEach(card => {
+    if (!expectedIds.has(card.dataset.articleId)) card.remove();
+  });
+}
+
+function insertArticleCardIfVisible(article) {
+  const sorted = applySort(filteredArticles(allArticles));
+  const index = sorted.findIndex(item => item.id === article.id);
+  if (index < 0) return false;
+  const feed = document.getElementById('feed');
+  const noRes = document.getElementById('no-results');
+  const node = createCardNode(article);
+  if (!node) return false;
+  for (let i = index + 1; i < sorted.length; i++) {
+    const nextCard = feed.querySelector(articleCardSelector(sorted[i].id));
+    if (nextCard) {
+      feed.insertBefore(node, nextCard);
+      noRes.style.display = 'none';
+      return true;
+    }
+  }
+  feed.appendChild(node);
+  noRes.style.display = 'none';
+  return true;
+}
+
+function patchVisibleAiSummaryCards(changedArticles) {
+  let patched = 0;
+  for (const article of changedArticles) {
+    const card = document.querySelector(articleCardSelector(article.id));
+    if (!card) {
+      if (insertArticleCardIfVisible(article)) patched++;
+      continue;
+    }
+    const text = String(article.summary || '').replace(/\s+/g, ' ').trim();
+    if (!text) continue;
+
+    updateCardSummaryNode(card, article);
+    updateCardBadgeNode(card, article);
+    updateCardImpactNode(card, article);
+    applyCardMetadata(card, article);
+
+    patched++;
+  }
+  return patched;
+}
+
+function scheduleAiSummaryPolling(progress = aiSummaryProgress) {
+  clearTimeout(aiSummaryPollTimer);
+  if (!progress || !progress.total) return;
+  const queued = Number(progress.queued || 0);
+  const inflight = Number(progress.inflight || 0);
+  if (progress.enabled === false && inflight <= 0 && queued <= 0) return;
+  if ((progress.pending || 0) <= 0 && inflight <= 0 && queued <= 0) return;
+  aiSummaryPollTimer = setTimeout(fetchAiSummaryUpdates, AI_SUMMARY_POLL_INTERVAL_MS);
+}
+
+async function fetchAiSummaryUpdates() {
+  try {
+    const r = await fetch('/api/news/ai-summaries');
+    if (!r.ok) throw new Error('AI summary update request failed');
+    const d = await r.json();
+    const changedArticles = mergeAiSummaryUpdates(d.updates || []);
+    aiSummaryProgress = d.progress || aiSummaryProgress;
+    if (changedArticles.length) {
+      patchVisibleAiSummaryCards(changedArticles);
+      fetchMarketSnapshot(false);
+    }
+    patchAiSummaryProgressPill(aiSummaryProgress);
+    scheduleAiSummaryPolling(aiSummaryProgress);
+  } catch (e) {
+    console.error('AI summary update error', e);
+    aiSummaryPollTimer = setTimeout(fetchAiSummaryUpdates, AI_SUMMARY_POLL_INTERVAL_MS * 2);
+  }
+}
+
 function startCountdown() {
   let secs = refreshInterval;
   clearInterval(countdownTimer);
@@ -1210,6 +1540,7 @@ async function fetchNews() {
     refreshInterval = d.refreshInterval || refreshInterval;
     allowedRefreshWindows = d.allowedRefreshWindows || allowedRefreshWindows;
     marketStatus = d.marketStatus || marketStatus;
+    aiSummaryProgress = d.aiSummaryProgress || aiSummaryProgress;
     syncRefreshControl();
     document.getElementById('updated').textContent = 'Updated ' + d.updated;
     const pulse = document.getElementById('refresh-pulse');
@@ -1222,6 +1553,7 @@ async function fetchNews() {
     render();
     updateHeatmap();
     startCountdown();
+    scheduleAiSummaryPolling(aiSummaryProgress);
   } catch (e) {
     console.error('News error', e);
     if (firstLoad) {

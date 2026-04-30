@@ -45,6 +45,7 @@
       <button class="filt-btn" id="bull-filt" onclick="toggleSentFilter('bullish')">&#9650; Bullish</button>
       <button class="filt-btn" id="bear-filt" onclick="toggleSentFilter('bearish')">&#9660; Bearish</button>
       <button class="filt-btn" id="bm-filt" onclick="toggleBookmarksOnly()">&#9733; Saved</button>
+      <button class="filt-btn" id="ai-filt" onclick="toggleAiSummaryOnly()">AI Summary</button>
       <span class="bar-sep">|</span>
       <span class="sort-lbl">Scope:</span>
       <button class="filt-btn scope-btn scope-on" onclick="setScopeFilter('all',this)">All</button>
@@ -64,7 +65,7 @@
       <span>&#128204; Sector: <strong id="f-name"></strong></span>
       <button class="clr-btn" onclick="clearFilter()">&#10005; Clear</button>
     </div>
-    <div id="feed"><div class="loading"><div class="spinner"></div><div>Fetching Indian market news…</div></div></div>
+    <div id="feed"></div>
     <div id="no-results">No articles match your current filters.</div>
   </div>
   <div class="sidebar">

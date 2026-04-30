@@ -4,8 +4,15 @@ This repo contains a Flask backend plus a static frontend for an India-focused m
 
 ## Project Layout
 
-- `backend/`: Flask API, polling loops, persistence, market/news analytics
+- `backend/app.py`: Flask API routes, polling loops, runtime orchestration, and provider fallback wiring
+- `backend/core/`: runtime settings and SQLite persistence
+- `backend/news/`: RSS sources, article extraction, news scoring, AI prompts, and AI summary queueing
+- `backend/market/`: symbol catalogs, NSE/Yahoo/Upstox mappings, and reusable market math
+- `backend/providers/upstox/`: Upstox quote parsing, Market Data Feed V3 helpers, live feed client, and option-chain summarization
+- `backend/worker.py`: production worker entrypoint for news polling, market refresh, Upstox streaming, and AI queue work
 - `frontend/`: static HTML, CSS, and vanilla JavaScript dashboard
+- `docs/production_improvement_plan.md`: phased roadmap for AI quality, worker separation, UI cleanup, and production hardening
+- `docs/aws_lightsail_deployment.md`: step-by-step production runbook for `stockterminal.in`
 - `deploy/lightsail/`: example systemd, Nginx, and environment files for AWS Lightsail
 - `tests/`: regression tests for scoring, persistence, derivatives, and Upstox integration helpers
 
@@ -54,6 +61,7 @@ Production-friendly Upstox endpoints:
 The repo now includes a Lightsail-oriented deployment path built around:
 
 - `gunicorn` with a single worker so the in-process refresh loops run once
+- optional split-process mode with `gunicorn` for web routes and `backend.worker` for background loops
 - `systemd` for service supervision
 - `nginx` as the reverse proxy in front of the local `gunicorn` port
 - a Lightsail static public IP used directly for Upstox IP registration
@@ -61,6 +69,7 @@ The repo now includes a Lightsail-oriented deployment path built around:
 Included files:
 
 - [deploy/lightsail/market-desk.service](/Users/yashkumar/Documents/claude-projects/indian-market-news-bot/deploy/lightsail/market-desk.service)
+- [deploy/lightsail/market-desk-worker.service](/Users/yashkumar/Documents/claude-projects/indian-market-news-bot/deploy/lightsail/market-desk-worker.service)
 - [deploy/lightsail/market-desk.env.example](/Users/yashkumar/Documents/claude-projects/indian-market-news-bot/deploy/lightsail/market-desk.env.example)
 - [deploy/lightsail/nginx-market-desk.conf](/Users/yashkumar/Documents/claude-projects/indian-market-news-bot/deploy/lightsail/nginx-market-desk.conf)
 
@@ -68,11 +77,11 @@ Recommended flow:
 
 1. Launch an Ubuntu Lightsail instance and attach a static IP.
 2. Point a domain or subdomain to that static IP.
-3. Clone this repo to `/srv/indian-market-news-bot`.
+3. Clone this repo to `/srv/indian-news-bot/indian-market-news-bot`.
 4. Create a virtualenv and install dependencies:
 
 ```bash
-cd /srv/indian-market-news-bot
+cd /srv/indian-news-bot/indian-market-news-bot
 python3 -m venv .venv
 . .venv/bin/activate
 pip install -r requirements.txt
@@ -87,21 +96,27 @@ cp deploy/lightsail/market-desk.env.example deploy/lightsail/market-desk.env
 Important values:
 
 ```text
-MARKET_DESK_DATA_DIR=/srv/indian-market-news-bot/backend/data
+MARKET_DESK_DATA_DIR=/srv/indian-news-bot/indian-market-news-bot/backend/data
+MARKET_DESK_DISABLE_THREADS=1
 MARKET_DATA_PROVIDER=upstox
 UPSTOX_CLIENT_ID=<your_upstox_api_key>
 UPSTOX_CLIENT_SECRET=<your_upstox_api_secret>
 UPSTOX_REDIRECT_URI=https://<your-domain>/api/auth/upstox/callback
 UPSTOX_PRIMARY_IP=<your_lightsail_static_ip>
 UPSTOX_SECONDARY_IP=
+
+AI_PROVIDER=bedrock
+BEDROCK_REGION=ap-south-1
+BEDROCK_MODEL_ID=qwen.qwen3-next-80b-a3b
 ```
 
 6. Install the systemd service:
 
 ```bash
 sudo cp deploy/lightsail/market-desk.service /etc/systemd/system/market-desk.service
+sudo cp deploy/lightsail/market-desk-worker.service /etc/systemd/system/market-desk-worker.service
 sudo systemctl daemon-reload
-sudo systemctl enable --now market-desk
+sudo systemctl enable --now market-desk market-desk-worker
 ```
 
 7. Install and enable Nginx using the included site config:
@@ -121,9 +136,14 @@ sudo systemctl reload nginx
 
 Notes:
 
-- Keep `gunicorn` at `--workers 1` unless we later move background loops out of process.
+- With `MARKET_DESK_DISABLE_THREADS=1`, Gunicorn serves HTTP only and `market-desk-worker` owns polling, AI queueing, and live feed loops.
+- Runtime news/market snapshots are shared through SQLite so the web process can stay fast while the worker refreshes data.
 - Lightsail already gives you the fixed public IP you need, so no outbound proxy layer is required.
 - If you update static IPs in Upstox, existing tokens can be invalidated and you may need to complete OAuth again.
+
+For the full production upgrade path for the existing `stockterminal.in` site, follow:
+
+- [docs/aws_lightsail_deployment.md](/Users/yashkumar/Documents/claude-projects/indian-market-news-bot/docs/aws_lightsail_deployment.md)
 
 ## Validation
 

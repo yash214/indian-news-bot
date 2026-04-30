@@ -20,25 +20,276 @@ Run from the project root:
 
 from __future__ import annotations
 
-import hashlib
 import json
-import math
 import os
 import queue
 import re
 import secrets
-import sqlite3
 import sys
 import threading
 import time
 from pathlib import Path
-from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, datetime, time as dt_time, timezone, timedelta
-from statistics import mean, pstdev
-from urllib.parse import quote_plus, urlencode
+from urllib.parse import urlencode
 
 from flask import Flask, Response, jsonify, redirect, request, stream_with_context
+
+try:
+    from backend.core.settings import (
+        ALLOWED_REFRESH_WINDOWS,
+        BACKEND_DIR,
+        DATA_DIR,
+        DEFAULT_APP_STATE,
+        DEFAULT_TRACKED_TICKERS,
+        DEFAULT_WATCHLIST,
+        HOLIDAY_CALENDAR_PATH,
+        IST,
+        MARKET_CLOSE_TIME,
+        MARKET_OPEN_TIME,
+        STATE_DB_PATH,
+        UPSTOX_AUTH_STATE_KEY,
+        UPSTOX_AUTH_TOKEN_KEY,
+        WATCHLIST_SYMBOL_LIMIT,
+    )
+    from backend.core.persistence import (
+        db_connect,
+        db_get_json,
+        db_set_json,
+        default_app_state,
+        ensure_data_dir,
+        init_state_db,
+        load_persisted_ai_news_analysis,
+        load_persisted_ai_news_summary,
+        load_persisted_app_state,
+        load_refresh_settings,
+        load_upstox_oauth_state,
+        persist_ai_news_analysis,
+        persist_ai_news_summary,
+        persist_refresh_settings,
+        persist_upstox_oauth_state,
+        sanitize_bookmarks,
+        sanitize_portfolio,
+        sanitize_state_patch,
+        sanitize_symbols,
+    )
+    from backend.news.sources import GLOBAL_SCOPE, LOCAL_SCOPE, RSS_FEEDS, google_news_search_rss, news_feed
+    from backend.market.catalog import (
+        ANALYTICS_INDEX_NAMES,
+        INDEX_HISTORY_SYMBOLS,
+        NSE_INDICES_WANTED,
+        NSE_STOCKS,
+        PRIMARY_LEVEL_LABELS,
+        SECTOR_TO_INDEX,
+        SYMBOL_SUGGESTIONS,
+        UPSTOX_DEFAULT_INSTRUMENT_KEYS,
+        UPSTOX_INDEX_INSTRUMENT_KEYS,
+        UPSTOX_OPTION_UNDERLYINGS,
+        YAHOO_EXTRAS,
+        sanitize_symbol_list,
+        search_symbols,
+        symbol_directory_entry,
+    )
+    from backend.market.math import (
+        bias_from_score,
+        clamp,
+        conviction_from_score,
+        day_type_from_context,
+        format_level,
+        implied_move_points,
+        intraday_range_pct,
+        intraday_return,
+        pct_return,
+        realized_vol,
+        relative_gap,
+        round_or_none,
+        rsi,
+        safe_float,
+        score_band,
+        setup_label,
+        sma,
+        trend_label,
+    )
+    from backend.news.scoring import (
+        BEARISH,
+        BULLISH,
+        IMPACT_EVENTS,
+        IMPACT_KW,
+        LOW_SIGNAL_HEADLINES,
+        MARKET_CONTEXT,
+        SECTOR_KW,
+        SOURCE_IMPACT,
+        TITLE_SHOCK,
+        build_sector_news_scores,
+        classify,
+        impact,
+        impact_details,
+        low_signal_penalty,
+        recency_impact_score,
+        sector_bias_label,
+        sentiment,
+        source_impact_score,
+        weighted_keyword_hits,
+    )
+    from backend.news.ai import NewsAiSummaryService
+    from backend.news.analysis import build_article_analysis_prompt, extract_json_object, normalize_article_analysis
+    from backend.news.summaries import (
+        build_news_summary_prompt,
+        extract_ollama_response_text,
+        normalize_ai_summary,
+        summary_needs_ai,
+    )
+    from backend.news.article_extract import article_text_is_useful, extract_article_text
+    from backend.providers.upstox.market_data import (
+        option_underlying_key,
+        parse_upstox_instrument_overrides,
+        parse_upstox_timestamp,
+        summarize_upstox_option_chain,
+        upstox_instrument_key_for_symbol,
+        upstox_quote_from_payload,
+        upstox_token_preview,
+    )
+    from backend.providers.upstox.v3_proto import decode_feed_response
+    from backend.providers.upstox.live import build_stream_request, stream_authorize_url, stream_quote_from_feed
+    from backend.news.text import (
+        build_article_preview,
+        clean_headline,
+        clean_summary,
+        feed_publisher_label,
+        keyword_re,
+        normalized_headline,
+        strip_html,
+        url_hash,
+    )
+except ModuleNotFoundError:
+    backend_module_dir = Path(__file__).resolve().parent
+    if str(backend_module_dir) not in sys.path:
+        sys.path.insert(0, str(backend_module_dir))
+    from core.settings import (
+        ALLOWED_REFRESH_WINDOWS,
+        BACKEND_DIR,
+        DATA_DIR,
+        DEFAULT_APP_STATE,
+        DEFAULT_TRACKED_TICKERS,
+        DEFAULT_WATCHLIST,
+        HOLIDAY_CALENDAR_PATH,
+        IST,
+        MARKET_CLOSE_TIME,
+        MARKET_OPEN_TIME,
+        STATE_DB_PATH,
+        UPSTOX_AUTH_STATE_KEY,
+        UPSTOX_AUTH_TOKEN_KEY,
+        WATCHLIST_SYMBOL_LIMIT,
+    )
+    from core.persistence import (
+        db_connect,
+        db_get_json,
+        db_set_json,
+        default_app_state,
+        ensure_data_dir,
+        init_state_db,
+        load_persisted_ai_news_analysis,
+        load_persisted_ai_news_summary,
+        load_persisted_app_state,
+        load_refresh_settings,
+        load_upstox_oauth_state,
+        persist_ai_news_analysis,
+        persist_ai_news_summary,
+        persist_refresh_settings,
+        persist_upstox_oauth_state,
+        sanitize_bookmarks,
+        sanitize_portfolio,
+        sanitize_state_patch,
+        sanitize_symbols,
+    )
+    from news.sources import GLOBAL_SCOPE, LOCAL_SCOPE, RSS_FEEDS, google_news_search_rss, news_feed
+    from market.catalog import (
+        ANALYTICS_INDEX_NAMES,
+        INDEX_HISTORY_SYMBOLS,
+        NSE_INDICES_WANTED,
+        NSE_STOCKS,
+        PRIMARY_LEVEL_LABELS,
+        SECTOR_TO_INDEX,
+        SYMBOL_SUGGESTIONS,
+        UPSTOX_DEFAULT_INSTRUMENT_KEYS,
+        UPSTOX_INDEX_INSTRUMENT_KEYS,
+        UPSTOX_OPTION_UNDERLYINGS,
+        YAHOO_EXTRAS,
+        sanitize_symbol_list,
+        search_symbols,
+        symbol_directory_entry,
+    )
+    from market.math import (
+        bias_from_score,
+        clamp,
+        conviction_from_score,
+        day_type_from_context,
+        format_level,
+        implied_move_points,
+        intraday_range_pct,
+        intraday_return,
+        pct_return,
+        realized_vol,
+        relative_gap,
+        round_or_none,
+        rsi,
+        safe_float,
+        score_band,
+        setup_label,
+        sma,
+        trend_label,
+    )
+    from news.scoring import (
+        BEARISH,
+        BULLISH,
+        IMPACT_EVENTS,
+        IMPACT_KW,
+        LOW_SIGNAL_HEADLINES,
+        MARKET_CONTEXT,
+        SECTOR_KW,
+        SOURCE_IMPACT,
+        TITLE_SHOCK,
+        build_sector_news_scores,
+        classify,
+        impact,
+        impact_details,
+        low_signal_penalty,
+        recency_impact_score,
+        sector_bias_label,
+        sentiment,
+        source_impact_score,
+        weighted_keyword_hits,
+    )
+    from news.ai import NewsAiSummaryService
+    from news.analysis import build_article_analysis_prompt, extract_json_object, normalize_article_analysis
+    from news.summaries import (
+        build_news_summary_prompt,
+        extract_ollama_response_text,
+        normalize_ai_summary,
+        summary_needs_ai,
+    )
+    from news.article_extract import article_text_is_useful, extract_article_text
+    from providers.upstox.market_data import (
+        option_underlying_key,
+        parse_upstox_instrument_overrides,
+        parse_upstox_timestamp,
+        summarize_upstox_option_chain,
+        upstox_instrument_key_for_symbol,
+        upstox_quote_from_payload,
+        upstox_token_preview,
+    )
+    from providers.upstox.v3_proto import decode_feed_response
+    from providers.upstox.live import build_stream_request, stream_authorize_url, stream_quote_from_feed
+    from news.text import (
+        build_article_preview,
+        clean_headline,
+        clean_summary,
+        feed_publisher_label,
+        keyword_re,
+        normalized_headline,
+        strip_html,
+        url_hash,
+    )
 
 try:
     import certifi
@@ -57,274 +308,8 @@ except ImportError:
     yf = None
 
 # ── Config ─────────────────────────────────────────────────────────────────
-IST = timezone(timedelta(hours=5, minutes=30))
-
-LOCAL_SCOPE = "local"
-GLOBAL_SCOPE = "global"
-
-LOCAL_NEWS_PARAMS = {"hl": "en-IN", "gl": "IN", "ceid": "IN:en"}
-GLOBAL_NEWS_PARAMS = {"hl": "en-US", "gl": "US", "ceid": "US:en"}
-
-
-def news_feed(name: str, url: str, scope: str) -> dict[str, str]:
-    return {"name": name, "url": url, "scope": scope}
-
-
-def google_news_search_rss(query: str, scope: str) -> str:
-    params = LOCAL_NEWS_PARAMS if scope == LOCAL_SCOPE else GLOBAL_NEWS_PARAMS
-    return (
-        "https://news.google.com/rss/search?"
-        f"q={quote_plus(query)}&hl={params['hl']}&gl={params['gl']}&ceid={params['ceid']}"
-    )
-
-
-RSS_FEEDS = [
-    news_feed("Moneycontrol Markets", "https://www.moneycontrol.com/rss/latestnews.xml", LOCAL_SCOPE),
-    news_feed("LiveMint Markets", "https://www.livemint.com/rss/markets", LOCAL_SCOPE),
-    news_feed("LiveMint Companies", "https://www.livemint.com/rss/companies", LOCAL_SCOPE),
-    news_feed("ET Markets", "https://economictimes.indiatimes.com/markets/rss.cms", LOCAL_SCOPE),
-    news_feed(
-        "Business Standard Markets",
-        google_news_search_rss("(indian stock market OR sensex OR nifty OR rbi OR rupee) site:business-standard.com", LOCAL_SCOPE),
-        LOCAL_SCOPE,
-    ),
-    news_feed(
-        "Financial Express Markets",
-        google_news_search_rss("(indian stock market OR sensex OR nifty OR ipo OR rupee) site:financialexpress.com", LOCAL_SCOPE),
-        LOCAL_SCOPE,
-    ),
-    news_feed(
-        "CNBC TV18 Markets",
-        google_news_search_rss("(indian stock market OR sensex OR nifty OR rupee OR rbi) site:cnbctv18.com", LOCAL_SCOPE),
-        LOCAL_SCOPE,
-    ),
-    news_feed(
-        "Business Today Markets",
-        google_news_search_rss("(indian stock market OR sensex OR nifty OR ipo OR results) site:businesstoday.in", LOCAL_SCOPE),
-        LOCAL_SCOPE,
-    ),
-    news_feed(
-        "BusinessLine Markets",
-        google_news_search_rss("(indian stock market OR sensex OR nifty OR rupee OR rbi) site:thehindubusinessline.com", LOCAL_SCOPE),
-        LOCAL_SCOPE,
-    ),
-    news_feed(
-        "NDTV Profit Markets",
-        google_news_search_rss("(indian stock market OR sensex OR nifty OR rupee OR crude) site:ndtvprofit.com", LOCAL_SCOPE),
-        LOCAL_SCOPE,
-    ),
-    news_feed("Google News India Markets", google_news_search_rss("indian stock market nifty sensex", LOCAL_SCOPE), LOCAL_SCOPE),
-    news_feed("Google News India IT", google_news_search_rss("nifty IT infosys wipro hcltech tcs", LOCAL_SCOPE), LOCAL_SCOPE),
-    news_feed(
-        "Google News India Macro",
-        google_news_search_rss("RBI SEBI india economy inflation rupee bond yields", LOCAL_SCOPE),
-        LOCAL_SCOPE,
-    ),
-    news_feed(
-        "Google News India Banking",
-        google_news_search_rss("hdfc icici sbi nifty bank RBI banking india", LOCAL_SCOPE),
-        LOCAL_SCOPE,
-    ),
-    news_feed(
-        "Google News India Crude",
-        google_news_search_rss("crude oil brent wti india OMC fuel inflation", LOCAL_SCOPE),
-        LOCAL_SCOPE,
-    ),
-    news_feed(
-        "Reuters Markets",
-        google_news_search_rss("(markets OR stocks OR bonds OR forex OR oil OR central bank) site:reuters.com", GLOBAL_SCOPE),
-        GLOBAL_SCOPE,
-    ),
-    news_feed(
-        "Bloomberg Markets",
-        google_news_search_rss("(markets OR stocks OR bonds OR oil OR rates) site:bloomberg.com", GLOBAL_SCOPE),
-        GLOBAL_SCOPE,
-    ),
-    news_feed(
-        "CNBC Global Markets",
-        google_news_search_rss("(markets OR stocks OR bonds OR oil OR currencies) site:cnbc.com", GLOBAL_SCOPE),
-        GLOBAL_SCOPE,
-    ),
-    news_feed(
-        "MarketWatch Markets",
-        google_news_search_rss("(markets OR stocks OR bonds OR oil OR fed) site:marketwatch.com", GLOBAL_SCOPE),
-        GLOBAL_SCOPE,
-    ),
-    news_feed(
-        "Financial Times Markets",
-        google_news_search_rss("(markets OR stocks OR bonds OR oil OR central bank) site:ft.com", GLOBAL_SCOPE),
-        GLOBAL_SCOPE,
-    ),
-    news_feed(
-        "WSJ Markets",
-        google_news_search_rss("(markets OR stocks OR bonds OR oil OR fed) site:wsj.com", GLOBAL_SCOPE),
-        GLOBAL_SCOPE,
-    ),
-    news_feed(
-        "Barrons Markets",
-        google_news_search_rss("(markets OR stocks OR bonds OR oil OR fed) site:barrons.com", GLOBAL_SCOPE),
-        GLOBAL_SCOPE,
-    ),
-    news_feed(
-        "Yahoo Finance Markets",
-        google_news_search_rss("(markets OR stocks OR bonds OR oil OR forex) site:finance.yahoo.com", GLOBAL_SCOPE),
-        GLOBAL_SCOPE,
-    ),
-    news_feed(
-        "Google News Global Macro",
-        google_news_search_rss("global stock market federal reserve ECB treasury yields oil prices currency markets", GLOBAL_SCOPE),
-        GLOBAL_SCOPE,
-    ),
-]
-
-NSE_INDICES_WANTED = {
-    "NIFTY 50":         "Nifty 50",
-    "NIFTY IT":         "Nifty IT",
-    "NIFTY BANK":       "Nifty Bank",
-    "NIFTY MIDCAP 100": "Nifty Midcap",
-    "NIFTY SMLCAP 100": "Nifty Smallcap",
-    "INDIA VIX":        "VIX",
-}
-
-NSE_STOCKS = {
-    "Infosys":  "INFY",
-    "HCL Tech": "HCLTECH",
-    "Wipro":    "WIPRO",
-    "TCS":      "TCS",
-    "Reliance": "RELIANCE",
-}
-
-SYMBOL_SUGGESTIONS = [
-    {"symbol": "RELIANCE", "name": "Reliance Industries", "sector": "Energy"},
-    {"symbol": "TCS", "name": "Tata Consultancy Services", "sector": "IT"},
-    {"symbol": "INFY", "name": "Infosys", "sector": "IT"},
-    {"symbol": "HCLTECH", "name": "HCL Technologies", "sector": "IT"},
-    {"symbol": "WIPRO", "name": "Wipro", "sector": "IT"},
-    {"symbol": "TECHM", "name": "Tech Mahindra", "sector": "IT"},
-    {"symbol": "LTIM", "name": "LTIMindtree", "sector": "IT"},
-    {"symbol": "PERSISTENT", "name": "Persistent Systems", "sector": "IT"},
-    {"symbol": "COFORGE", "name": "Coforge", "sector": "IT"},
-    {"symbol": "TATAELXSI", "name": "Tata Elxsi", "sector": "IT"},
-    {"symbol": "HDFCBANK", "name": "HDFC Bank", "sector": "Banking"},
-    {"symbol": "ICICIBANK", "name": "ICICI Bank", "sector": "Banking"},
-    {"symbol": "SBIN", "name": "State Bank of India", "sector": "Banking"},
-    {"symbol": "AXISBANK", "name": "Axis Bank", "sector": "Banking"},
-    {"symbol": "KOTAKBANK", "name": "Kotak Mahindra Bank", "sector": "Banking"},
-    {"symbol": "INDUSINDBK", "name": "IndusInd Bank", "sector": "Banking"},
-    {"symbol": "BANKBARODA", "name": "Bank of Baroda", "sector": "Banking"},
-    {"symbol": "PNB", "name": "Punjab National Bank", "sector": "Banking"},
-    {"symbol": "AUBANK", "name": "AU Small Finance Bank", "sector": "Banking"},
-    {"symbol": "IDFCFIRSTB", "name": "IDFC First Bank", "sector": "Banking"},
-    {"symbol": "ITC", "name": "ITC", "sector": "FMCG"},
-    {"symbol": "HINDUNILVR", "name": "Hindustan Unilever", "sector": "FMCG"},
-    {"symbol": "NESTLEIND", "name": "Nestle India", "sector": "FMCG"},
-    {"symbol": "BRITANNIA", "name": "Britannia Industries", "sector": "FMCG"},
-    {"symbol": "DABUR", "name": "Dabur India", "sector": "FMCG"},
-    {"symbol": "MARICO", "name": "Marico", "sector": "FMCG"},
-    {"symbol": "SUNPHARMA", "name": "Sun Pharma", "sector": "Pharma"},
-    {"symbol": "CIPLA", "name": "Cipla", "sector": "Pharma"},
-    {"symbol": "DRREDDY", "name": "Dr Reddy's Laboratories", "sector": "Pharma"},
-    {"symbol": "DIVISLAB", "name": "Divi's Laboratories", "sector": "Pharma"},
-    {"symbol": "LUPIN", "name": "Lupin", "sector": "Pharma"},
-    {"symbol": "TORNTPHARM", "name": "Torrent Pharmaceuticals", "sector": "Pharma"},
-    {"symbol": "MANKIND", "name": "Mankind Pharma", "sector": "Pharma"},
-    {"symbol": "MARUTI", "name": "Maruti Suzuki", "sector": "Auto"},
-    {"symbol": "TATAMOTORS", "name": "Tata Motors", "sector": "Auto"},
-    {"symbol": "M&M", "name": "Mahindra & Mahindra", "sector": "Auto"},
-    {"symbol": "BAJAJ-AUTO", "name": "Bajaj Auto", "sector": "Auto"},
-    {"symbol": "EICHERMOT", "name": "Eicher Motors", "sector": "Auto"},
-    {"symbol": "HEROMOTOCO", "name": "Hero MotoCorp", "sector": "Auto"},
-    {"symbol": "TVSMOTOR", "name": "TVS Motor", "sector": "Auto"},
-    {"symbol": "LT", "name": "Larsen & Toubro", "sector": "Infra"},
-    {"symbol": "ULTRACEMCO", "name": "UltraTech Cement", "sector": "Infra"},
-    {"symbol": "ADANIPORTS", "name": "Adani Ports", "sector": "Infra"},
-    {"symbol": "SIEMENS", "name": "Siemens India", "sector": "Infra"},
-    {"symbol": "ABB", "name": "ABB India", "sector": "Infra"},
-    {"symbol": "NTPC", "name": "NTPC", "sector": "Energy"},
-    {"symbol": "POWERGRID", "name": "Power Grid Corporation", "sector": "Energy"},
-    {"symbol": "ONGC", "name": "ONGC", "sector": "Energy"},
-    {"symbol": "BPCL", "name": "Bharat Petroleum", "sector": "Energy"},
-    {"symbol": "COALINDIA", "name": "Coal India", "sector": "Energy"},
-    {"symbol": "JSWSTEEL", "name": "JSW Steel", "sector": "Metals"},
-    {"symbol": "TATASTEEL", "name": "Tata Steel", "sector": "Metals"},
-    {"symbol": "HINDALCO", "name": "Hindalco", "sector": "Metals"},
-    {"symbol": "VEDL", "name": "Vedanta", "sector": "Metals"},
-    {"symbol": "ADANIENT", "name": "Adani Enterprises", "sector": "General"},
-    {"symbol": "BAJFINANCE", "name": "Bajaj Finance", "sector": "Financials"},
-    {"symbol": "BAJAJFINSV", "name": "Bajaj Finserv", "sector": "Financials"},
-    {"symbol": "JIOFIN", "name": "Jio Financial Services", "sector": "Financials"},
-    {"symbol": "ASIANPAINT", "name": "Asian Paints", "sector": "General"},
-    {"symbol": "TITAN", "name": "Titan Company", "sector": "General"},
-    {"symbol": "BHARTIARTL", "name": "Bharti Airtel", "sector": "Telecom"},
-]
-
-YAHOO_EXTRAS = {
-    "Gold":        ("GC=F",     "$"),
-    "USD/INR":     ("USDINR=X", ""),
-    "Crude Oil":   ("CL=F",     "$"),
-    "Brent Crude": ("BZ=F",     "$"),
-}
-
-ANALYTICS_INDEX_NAMES = {
-    "NIFTY 50": "Nifty 50",
-    "NIFTY BANK": "Nifty Bank",
-    "NIFTY IT": "Nifty IT",
-    "NIFTY AUTO": "Nifty Auto",
-    "NIFTY FMCG": "Nifty FMCG",
-    "NIFTY PHARMA": "Nifty Pharma",
-    "NIFTY METAL": "Nifty Metal",
-    "NIFTY REALTY": "Nifty Realty",
-    "NIFTY PSU BANK": "Nifty PSU Bank",
-    "NIFTY FIN SERVICE": "Nifty Financial",
-    "NIFTY FINANCIAL SERVICES": "Nifty Financial",
-    "NIFTY MIDCAP 100": "Nifty Midcap",
-    "NIFTY SMLCAP 100": "Nifty Smallcap",
-    "NIFTY OIL & GAS": "Nifty Oil & Gas",
-    "INDIA VIX": "India VIX",
-}
-
-PRIMARY_LEVEL_LABELS = ["Nifty 50", "Nifty Bank", "Nifty IT", "India VIX"]
-
-INDEX_HISTORY_SYMBOLS = {
-    "Nifty 50": ["^NSEI"],
-    "Nifty Bank": ["^NSEBANK", "^CNXBANK"],
-    "Nifty IT": ["^CNXIT"],
-    "India VIX": ["^INDIAVIX"],
-}
-
-SECTOR_TO_INDEX = {
-    "IT": "Nifty IT",
-    "Banking": "Nifty Bank",
-    "Pharma": "Nifty Pharma",
-    "Auto": "Nifty Auto",
-    "Energy": "Nifty Oil & Gas",
-    "FMCG": "Nifty FMCG",
-    "Metals": "Nifty Metal",
-    "Infra": "Nifty Realty",
-    "General": "Nifty 50",
-}
-
-WATCHLIST_SYMBOL_LIMIT = 12
 TRACKED_QUOTE_LIMIT = 20
 
-DEFAULT_TRACKED_TICKERS = ["INFY", "HCLTECH", "WIPRO", "TCS", "RELIANCE"]
-DEFAULT_WATCHLIST = ["INFY", "HCLTECH", "WIPRO", "RELIANCE"]
-DEFAULT_APP_STATE = {
-    "tickerSelections": DEFAULT_TRACKED_TICKERS,
-    "watchlist": DEFAULT_WATCHLIST,
-    "bookmarks": [],
-    "portfolio": {},
-}
-
-BACKEND_DIR = Path(__file__).resolve().parent
-DEFAULT_DATA_DIR = BACKEND_DIR / "data"
-DATA_DIR = Path(os.environ.get("MARKET_DESK_DATA_DIR", str(DEFAULT_DATA_DIR))).expanduser()
-STATE_DB_PATH = DATA_DIR / "market_desk.db"
-HOLIDAY_CALENDAR_PATH = Path(
-    os.environ.get("MARKET_DESK_HOLIDAY_FILE", str(DEFAULT_DATA_DIR / "nse_holidays.json"))
-).expanduser()
-MARKET_OPEN_TIME = dt_time(hour=9, minute=15)
-MARKET_CLOSE_TIME = dt_time(hour=15, minute=30)
 PREOPEN_TICK_INTERVAL_SECONDS = 10
 INTRADAY_TICK_INTERVAL_SECONDS = 10
 AFTER_HOURS_TICK_INTERVAL_SECONDS = 60
@@ -339,37 +324,14 @@ MAX_NEWS_WORKERS = 8
 NSE_PROVIDER_NAME = "nse"
 UPSTOX_PROVIDER_NAME = "upstox"
 UPSTOX_DEFAULT_API_BASE = "https://api.upstox.com/v2"
+UPSTOX_DEFAULT_V3_API_BASE = "https://api.upstox.com/v3"
 UPSTOX_QUOTE_BATCH_LIMIT = 500
-UPSTOX_AUTH_STATE_KEY = "upstox_oauth_state"
-UPSTOX_AUTH_TOKEN_KEY = "upstox_auth_token"
-
-UPSTOX_DEFAULT_INSTRUMENT_KEYS = {
-    # Upstox quotes use stable instrument keys. These cover the app defaults
-    # without downloading the full BOD instrument file on every startup.
-    "INFY": "NSE_EQ|INE009A01021",
-    "HCLTECH": "NSE_EQ|INE860A01027",
-    "WIPRO": "NSE_EQ|INE075A01022",
-    "TCS": "NSE_EQ|INE467B01029",
-    "RELIANCE": "NSE_EQ|INE002A01018",
-}
-
-UPSTOX_INDEX_INSTRUMENT_KEYS = {
-    "Nifty 50": "NSE_INDEX|Nifty 50",
-    "Nifty Bank": "NSE_INDEX|Nifty Bank",
-    "Nifty IT": "NSE_INDEX|Nifty IT",
-    "India VIX": "NSE_INDEX|India VIX",
-}
-
-UPSTOX_OPTION_UNDERLYINGS = {
-    "NIFTY": "NSE_INDEX|Nifty 50",
-    "NIFTY50": "NSE_INDEX|Nifty 50",
-    "NIFTY 50": "NSE_INDEX|Nifty 50",
-    "BANKNIFTY": "NSE_INDEX|Nifty Bank",
-    "NIFTYBANK": "NSE_INDEX|Nifty Bank",
-    "NIFTY BANK": "NSE_INDEX|Nifty Bank",
-    "FINNIFTY": "NSE_INDEX|Nifty Fin Service",
-    "FIN NIFTY": "NSE_INDEX|Nifty Fin Service",
-}
+UPSTOX_STREAM_MODE = "full"
+UPSTOX_STREAM_RECONNECT_SECONDS = 5
+UPSTOX_STREAM_OPEN_STALE_SECONDS = 12.0
+UPSTOX_STREAM_CLOSED_STALE_SECONDS = 180.0
+RUNTIME_NEWS_STATE_KEY = "runtime_news_payload"
+RUNTIME_SNAPSHOT_STATE_KEY = "runtime_market_snapshot"
 
 EMPTY_ANALYTICS_PAYLOAD = {
     "generatedAt": None,
@@ -418,92 +380,6 @@ _sess.headers.update({
 NSE_SESSION.verify = certifi.where()
 NSE_SESSION.headers.update(NSE_HEADERS)
 
-SECTOR_KW = {
-    "IT":      ["infosys", "tcs", "wipro", "hcl", "tech mahindra", "coforge", "mphasis",
-                "ltimindtree", "hexaware", "software", "it sector", "nifty it", "nasdaq", "accenture"],
-    "Banking": ["hdfc bank", "icici bank", "sbi", "kotak", "axis bank", "rbi", "banking",
-                "npa", "credit", "loan", "nifty bank", "bandhan", "indusind", "yes bank"],
-    "Pharma":  ["sun pharma", "cipla", "dr reddy", "aurobindo", "divi", "lupin", "alkem",
-                "pharmaceutical", "drug", "fda", "usfda", "biocon", "glenmark"],
-    "Auto":    ["maruti", "tata motors", "m&m", "bajaj auto", "hero motocorp", "eicher",
-                "automobile", "ev", "electric vehicle", "auto sector", "tvs", "ola electric"],
-    "Energy":  ["reliance", "ongc", "ntpc", "power grid", "adani energy", "torrent power",
-                "oil", "gas", "crude", "crude oil", "brent", "wti", "opec", "solar",
-                "renewable", "bpcl", "ioc", "coal"],
-    "FMCG":    ["hindustan unilever", "hul", "itc", "nestle", "dabur", "emami",
-                "britannia", "fmcg", "consumer goods", "marico", "colgate", "godrej"],
-    "Metals":  ["tata steel", "jsw", "hindalco", "vedanta", "coal india", "jindal",
-                "steel", "aluminium", "copper", "metal", "nmdc", "sail", "moil"],
-    "Infra":   ["l&t", "larsen", "adani ports", "delhivery", "ircon", "rvnl",
-                "infrastructure", "construction", "cement", "road", "nhpc", "abb"],
-}
-
-BULLISH = {
-    "surge": 3, "soar": 3, "rally": 2, "record high": 3, "all-time high": 3, "52-week high": 2,
-    "outperform": 2, "upgrade": 2, "beat estimates": 3, "breakout": 2, "top gainer": 2,
-    "gain": 1, "rise": 1, "growth": 1, "positive": 1, "strong": 1, "robust": 2,
-    "bullish": 3, "buy": 2, "recovery": 2, "rebound": 2, "jump": 2,
-    "boost": 2, "higher": 1, "profit": 1, "earnings beat": 3, "outperformed": 2,
-    "above expectations": 2, "overweight": 2, "accumulate": 2, "target raised": 3,
-    "dividend": 1, "buyback": 2, "record profit": 3, "margin expansion": 2,
-}
-
-BEARISH = {
-    "crash": 3, "plunge": 3, "collapse": 3, "sell-off": 3, "selloff": 3,
-    "bearish": 3, "downgrade": 2, "miss": 2, "fall": 2, "drop": 2,
-    "decline": 2, "weak": 1, "loss": 2, "risk": 1, "concern": 1,
-    "pressure": 1, "correction": 2, "slump": 2, "negative": 1, "warning": 2,
-    "below expectations": 2, "cut": 1, "layoffs": 2, "slowdown": 2,
-    "recession": 3, "underweight": 2, "underperform": 2, "target cut": 3,
-    "margin squeeze": 2, "write-off": 3, "fraud": 3, "default": 3, "penalty": 2,
-    "52-week low": 2, "circuit breaker": 2, "suspension": 2, "ban": 2,
-}
-
-IMPACT_EVENTS = {
-    "rbi": 2.0, "sebi": 1.8, "budget": 1.8, "gdp": 1.4, "inflation": 1.5,
-    "fed": 1.4, "tariff": 1.4, "sanction": 1.5, "crash": 2.4,
-    "surge": 1.2, "record": 1.1, "ban": 2.0, "merger": 1.6,
-    "acquisition": 1.6, "takeover": 1.8, "quarterly results": 1.4,
-    "earnings": 1.2, "dividend": 0.7, "rate cut": 2.0, "rate hike": 2.0,
-    "repo rate": 1.8, "policy": 1.2, "war": 1.8, "election": 1.2,
-    "ipo": 0.8, "block deal": 1.2, "bulk deal": 1.2, "fii": 1.0,
-    "dii": 0.9, "circuit": 1.8, "halt": 1.8, "usfda": 1.5,
-    "crude oil": 1.5, "brent": 1.2, "wti": 1.1, "opec": 1.2,
-    "q1": 0.6, "q2": 0.6, "q3": 0.6, "q4": 0.6,
-}
-IMPACT_KW = list(IMPACT_EVENTS)
-
-MARKET_CONTEXT = {
-    "nifty": 1.0, "sensex": 0.9, "bank nifty": 1.0, "rupee": 0.8,
-    "usd/inr": 0.8, "india vix": 0.8, "f&o": 0.8, "derivatives": 0.7,
-    "options": 0.6, "futures": 0.6, "nse": 0.6, "bse": 0.5,
-    "infosys": 0.5, "tcs": 0.5, "reliance": 0.5, "hdfc bank": 0.5,
-    "icici bank": 0.5, "sbi": 0.5,
-}
-
-TITLE_SHOCK = {
-    "crash": 1.5, "plunge": 1.4, "collapse": 1.4, "surge": 1.1,
-    "soar": 1.1, "record": 0.9, "ban": 1.2, "fraud": 1.5,
-    "default": 1.5, "penalty": 1.0, "rate cut": 1.1, "rate hike": 1.1,
-}
-
-LOW_SIGNAL_HEADLINES = {
-    "stocks to watch": 1.2, "market live": 1.0, "live updates": 1.0,
-    "top news": 0.8, "opening bell": 0.7, "closing bell": 0.7,
-    "trade setup": 0.8, "day trading guide": 0.8,
-}
-
-SOURCE_IMPACT = {
-    "reuters": 1.0, "bloomberg": 1.0, "cnbc tv18": 0.9, "cnbc-tv18": 0.9,
-    "moneycontrol": 0.9, "ndtv profit": 0.85, "business standard": 0.8,
-    "economic times": 0.8, "et markets": 0.8, "businessline": 0.75,
-    "livemint": 0.75, "financial express": 0.7, "financial times": 0.8,
-    "wall street journal": 0.75, "wsj": 0.75, "barrons": 0.65,
-    "marketwatch": 0.55, "yahoo finance": 0.5, "google news": 0.3,
-}
-
-_KEYWORD_RE_CACHE: dict[str, re.Pattern] = {}
-
 # ── State ──────────────────────────────────────────────────────────────────
 _lock = threading.Lock()
 _sse_lock = threading.Lock()
@@ -516,7 +392,6 @@ _feed_status: dict = {}
 _updated: str = "loading..."
 _price_history: dict[str, list[float]] = {}
 MAX_HIST = 40
-ALLOWED_REFRESH_WINDOWS = [60, 120, 300, 600, 900]
 NSE_HOLIDAY_CALENDAR: dict[str, dict[str, str]] = {}
 _app_state: dict = {
     "tickerSelections": list(DEFAULT_TRACKED_TICKERS),
@@ -539,11 +414,26 @@ _yahoo_cache: dict[str, tuple[float, float, float, float]] = {}
 _yahoo_cache_ttl = 300.0
 _nse_quote_cache: dict[str, tuple[dict, float]] = {}
 _upstox_quote_cache: dict[str, tuple[dict, float]] = {}
+_ai_summary_service: NewsAiSummaryService | None = None
+_upstox_stream_quote_cache: dict[str, tuple[dict, float]] = {}
 _chart_cache: dict[tuple[str, str, str], tuple[dict, float]] = {}
 _chart_cache_ttl = 1800.0
 _news_refresh_seconds = 300
 _refresh_wakeup = threading.Event()
+_upstox_stream_wakeup = threading.Event()
 _thread_local = threading.local()
+_upstox_stream_status = {
+    "connected": False,
+    "lastConnectAt": None,
+    "lastDisconnectAt": None,
+    "lastMessageAt": None,
+    "lastError": None,
+    "mode": UPSTOX_STREAM_MODE,
+    "desiredSubscriptions": 0,
+    "activeSubscriptions": 0,
+    "segmentStatus": {},
+    "dependencyReady": False,
+}
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────
@@ -620,6 +510,14 @@ def upstox_api_base() -> str:
     return os.environ.get("UPSTOX_API_BASE", UPSTOX_DEFAULT_API_BASE).strip().rstrip("/")
 
 
+def upstox_v3_api_base() -> str:
+    configured = os.environ.get("UPSTOX_V3_API_BASE", "").strip().rstrip("/")
+    if configured:
+        return configured
+    base = upstox_api_base()
+    return re.sub(r"/v2/?$", "/v3", base) if re.search(r"/v2/?$", base) else UPSTOX_DEFAULT_V3_API_BASE
+
+
 def upstox_client_id() -> str:
     return os.environ.get("UPSTOX_CLIENT_ID", "").strip()
 
@@ -639,6 +537,15 @@ def upstox_auth_configured() -> bool:
 def upstox_fallback_enabled() -> bool:
     raw = os.environ.get("UPSTOX_FALLBACK_TO_NSE", "1").strip().lower()
     return raw not in {"0", "false", "no", "off"}
+
+
+def upstox_stream_stale_after(status: dict | None = None) -> float:
+    status = status or get_market_status()
+    return (
+        UPSTOX_STREAM_OPEN_STALE_SECONDS
+        if status.get("session") in {"preopen", "open"}
+        else UPSTOX_STREAM_CLOSED_STALE_SECONDS
+    )
 
 
 def upstox_oauth_dialog_url(state: str) -> str:
@@ -662,6 +569,7 @@ def market_data_provider_status() -> dict:
     configured = bool(upstox_access_token())
     active = active_market_data_provider()
     token_record = stored_upstox_token_record()
+    stream = upstox_stream_runtime_status()
     token_source = (
         "env"
         if os.environ.get("UPSTOX_ACCESS_TOKEN", "").strip()
@@ -676,9 +584,13 @@ def market_data_provider_status() -> dict:
         "upstoxAuthConfigured": upstox_auth_configured(),
         "upstoxTokenSource": token_source,
         "fallbackToNse": upstox_fallback_enabled(),
+        "streamConnected": stream["connected"],
+        "streamDependencyReady": stream["dependencyReady"],
         "reason": (
             "Upstox access token missing; using NSE fallback"
             if requested == UPSTOX_PROVIDER_NAME and not configured
+            else "Upstox V3 live stream enabled"
+            if active == UPSTOX_PROVIDER_NAME and stream["connected"]
             else "Upstox REST quotes enabled"
             if active == UPSTOX_PROVIDER_NAME
             else "NSE public endpoints enabled"
@@ -713,646 +625,40 @@ def quote_age_seconds(quote: dict | None, now_ts: float | None = None) -> float 
     return round(max(now_ts - float(quote["fetchedAt"]), 0), 1)
 
 
-def strip_html(s: str) -> str:
-    return re.sub(r"<[^>]+>", "", s or "").strip()
+def upstox_stream_runtime_status() -> dict:
+    with _lock:
+        status = dict(_upstox_stream_status)
+    last_message_at = status.get("lastMessageAt")
+    status["lastMessageAgeSeconds"] = round(max(time.time() - last_message_at, 0), 1) if last_message_at else None
+    status["lastConnectAt"] = datetime.fromtimestamp(status["lastConnectAt"], IST).isoformat() if status.get("lastConnectAt") else None
+    status["lastDisconnectAt"] = datetime.fromtimestamp(status["lastDisconnectAt"], IST).isoformat() if status.get("lastDisconnectAt") else None
+    status["lastMessageAt"] = datetime.fromtimestamp(last_message_at, IST).isoformat() if last_message_at else None
+    return status
 
 
-def url_hash(url: str) -> str:
-    return hashlib.md5(url.encode()).hexdigest()[:12]
-
-
-def clean_headline(title: str, publisher: str = "") -> str:
-    headline = strip_html(title)
-    source = strip_html(publisher)
-    suffix = f" - {source}"
-    if source and headline.lower().endswith(suffix.lower()):
-        headline = headline[:-len(suffix)].strip()
-    return headline
-
-
-def clean_summary(summary: str, publisher: str = "") -> str:
-    text = strip_html(summary)
-    source = strip_html(publisher)
-    if source:
-        text = re.sub(rf"(?:\s+[-|:]\s+|\s{{2,}}){re.escape(source)}$", "", text, flags=re.IGNORECASE).strip()
-    return text
-
-
-def feed_publisher_label(feed_name: str) -> str:
-    for suffix in (" Markets", " Companies"):
-        if feed_name.endswith(suffix):
-            return feed_name[:-len(suffix)]
-    return feed_name
-
-
-def normalized_headline(title: str) -> str:
-    return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9]+", " ", (title or "").lower())).strip()
-
-
-def keyword_re(keyword: str) -> re.Pattern:
-    key = (keyword or "").strip().lower()
-    cached = _KEYWORD_RE_CACHE.get(key)
-    if cached:
-        return cached
-    escaped = r"\s+".join(re.escape(part) for part in key.split())
-    prefix = r"(?<![a-z0-9])" if key and key[0].isalnum() else ""
-    suffix = r"(?![a-z0-9])" if key and key[-1].isalnum() else ""
-    pattern = re.compile(prefix + escaped + suffix, re.IGNORECASE)
-    _KEYWORD_RE_CACHE[key] = pattern
-    return pattern
-
-
-def keyword_found(text: str, keyword: str) -> bool:
-    return bool(keyword_re(keyword).search(text or ""))
-
-
-def weighted_keyword_hits(
-    title: str,
-    body: str,
-    weights: dict[str, float],
-    title_multiplier: float = 1.35,
-    body_multiplier: float = 1.0,
-) -> tuple[float, list[str]]:
-    score = 0.0
-    hits: list[str] = []
-    title = title or ""
-    body = body or ""
-    for keyword, weight in weights.items():
-        if keyword_found(title, keyword):
-            score += weight * title_multiplier
-            hits.append(keyword)
-        elif body and keyword_found(body, keyword):
-            score += weight * body_multiplier
-            hits.append(keyword)
-    return score, hits
-
-
-def classify(text: str) -> str:
-    t = (text or "").lower()
-    scores = {sec: sum(1 for k in kws if keyword_found(t, k)) for sec, kws in SECTOR_KW.items()}
-    best = max(scores, key=scores.get)
-    return best if scores[best] > 0 else "General"
-
-
-def sentiment(title: str, body: str) -> dict:
-    bull, _ = weighted_keyword_hits(title, body, BULLISH, title_multiplier=1.6)
-    bear, _ = weighted_keyword_hits(title, body, BEARISH, title_multiplier=1.6)
-    total = bull + bear
-    edge = abs(bull - bear)
-    if total <= 0 or edge < 0.75 or edge / total < 0.15:
-        return {"label": "neutral", "score": 0.0}
-    score = round(min(max(bull, bear) / (total + 2.0), 1.0), 2)
-    if bull > bear:
-        return {"label": "bullish", "score": score}
-    if bear > bull:
-        return {"label": "bearish", "score": score}
-    return {"label": "neutral", "score": 0.0}
-
-
-def source_impact_score(source: str) -> float:
-    source_l = (source or "").lower()
-    for key, score in SOURCE_IMPACT.items():
-        if key in source_l:
-            return score
-    return 0.35 if source_l else 0.0
-
-
-def recency_impact_score(published_dt: datetime | None, now: datetime | None = None) -> float:
-    if published_dt is None:
-        return 0.0
-    now = now or ist_now()
-    if published_dt.tzinfo is None:
-        published_dt = published_dt.replace(tzinfo=IST)
-    age_hours = max((now - published_dt.astimezone(IST)).total_seconds() / 3600, 0)
-    if age_hours <= 0.5:
-        return 1.0
-    if age_hours <= 2:
-        return 0.8
-    if age_hours <= 6:
-        return 0.5
-    if age_hours <= 24:
-        return 0.2
-    if age_hours <= 72:
-        return -0.3
-    return -0.8
-
-
-def low_signal_penalty(title: str, body: str, core_score: float) -> tuple[float, list[str]]:
-    score, hits = weighted_keyword_hits(title, body, LOW_SIGNAL_HEADLINES, title_multiplier=1.0)
-    if not hits:
-        return 0.0, []
-    penalty = min(score, 1.4)
-    if core_score >= 4:
-        penalty *= 0.45
-    return round(penalty, 2), hits
-
-
-def impact_details(
-    title: str,
-    body: str,
-    sent: dict,
-    source: str = "",
-    published_dt: datetime | None = None,
-    scope: str = LOCAL_SCOPE,
-    now: datetime | None = None,
-) -> tuple[int, dict]:
-    event_raw, event_hits = weighted_keyword_hits(title, body, IMPACT_EVENTS, title_multiplier=1.35)
-    context_raw, context_hits = weighted_keyword_hits(title, body, MARKET_CONTEXT, title_multiplier=1.2)
-    shock_raw, shock_hits = weighted_keyword_hits(title, "", TITLE_SHOCK, title_multiplier=1.0)
-
-    sentiment_component = min(float(sent.get("score", 0.0)) * 4.2, 3.6)
-    event_component = min(event_raw, 4.2)
-    context_component = min(context_raw, 1.2)
-    title_component = min(shock_raw, 1.4)
-    core_score = sentiment_component + event_component + context_component + title_component
-
-    source_component = source_impact_score(source)
-    freshness_component = recency_impact_score(published_dt, now)
-    if core_score < 2:
-        source_component *= 0.35
-        freshness_component *= 0.35
-    if scope == LOCAL_SCOPE and context_hits:
-        context_component = min(context_component + 0.25, 1.3)
-
-    penalty, low_signal_hits = low_signal_penalty(title, body, core_score)
-    raw_score = core_score + source_component + freshness_component - penalty
-    if core_score < 1:
-        raw_score = min(raw_score, 2.0)
-
-    score = int(clamp(round(raw_score), 0, 10))
-    matched = sorted(set(event_hits + context_hits + shock_hits))
-    reasons = []
-    if sent.get("label") != "neutral":
-        reasons.append(f"{sent.get('label')} sentiment")
-    if event_hits:
-        reasons.append("event: " + ", ".join(event_hits[:4]))
-    if context_hits:
-        reasons.append("market context: " + ", ".join(context_hits[:3]))
-    if source_component >= 0.6:
-        reasons.append(f"source: {source}")
-    if freshness_component >= 0.6:
-        reasons.append("fresh headline")
-    if penalty:
-        reasons.append("generic headline penalty")
-
-    return score, {
-        "raw": round(raw_score, 2),
-        "components": {
-            "sentiment": round(sentiment_component, 2),
-            "event": round(event_component, 2),
-            "context": round(context_component, 2),
-            "title": round(title_component, 2),
-            "source": round(source_component, 2),
-            "freshness": round(freshness_component, 2),
-            "penalty": round(penalty, 2),
-        },
-        "matchedKeywords": matched[:12],
-        "lowSignalKeywords": low_signal_hits,
-        "reasons": reasons[:6],
-    }
-
-
-def impact(
-    title: str,
-    body: str,
-    sent: dict,
-    source: str = "",
-    published_dt: datetime | None = None,
-    scope: str = LOCAL_SCOPE,
-) -> int:
-    score, _ = impact_details(title, body, sent, source=source, published_dt=published_dt, scope=scope)
-    return score
-
-
-# ── Analytics helpers ─────────────────────────────────────────────────────
-def safe_float(value, default: float = 0.0) -> float:
+def upstox_stream_dependencies_ready() -> bool:
     try:
-        if value is None or value == "":
-            return default
-        if isinstance(value, str):
-            value = value.replace(",", "").strip()
-        return float(value)
-    except Exception:
-        return default
-
-
-def round_or_none(value: float | None, digits: int = 2) -> float | None:
-    if value is None:
-        return None
-    return round(value, digits)
-
-
-def sma(values: list[float], length: int) -> float | None:
-    if len(values) < length:
-        return None
-    return mean(values[-length:])
-
-
-def pct_return(values: list[float], periods: int) -> float | None:
-    if len(values) <= periods:
-        return None
-    prev = values[-periods - 1]
-    if not prev:
-        return None
-    return (values[-1] - prev) / prev * 100
-
-
-def realized_vol(values: list[float], periods: int = 20) -> float | None:
-    if len(values) <= periods:
-        return None
-    rets = []
-    window = values[-(periods + 1):]
-    for prev, cur in zip(window, window[1:]):
-        if prev:
-            rets.append((cur - prev) / prev)
-    if len(rets) < 2:
-        return None
-    return pstdev(rets) * math.sqrt(252) * 100
-
-
-def rsi(values: list[float], period: int = 14) -> float | None:
-    if len(values) <= period:
-        return None
-    gains, losses = [], []
-    for prev, cur in zip(values[-(period + 1):], values[-period:]):
-        delta = cur - prev
-        gains.append(max(delta, 0.0))
-        losses.append(abs(min(delta, 0.0)))
-    avg_gain = mean(gains)
-    avg_loss = mean(losses)
-    if avg_loss == 0:
-        return 100.0 if avg_gain > 0 else 50.0
-    rs = avg_gain / avg_loss
-    return 100 - (100 / (1 + rs))
-
-
-def trend_label(price: float, sma20_val: float | None, sma50_val: float | None, rsi_val: float | None) -> str:
-    if not sma20_val or not sma50_val or rsi_val is None:
-        return "Developing"
-    if price > sma20_val > sma50_val and rsi_val >= 55:
-        return "Uptrend"
-    if price < sma20_val < sma50_val and rsi_val <= 45:
-        return "Downtrend"
-    if price > sma20_val and rsi_val >= 50:
-        return "Accumulation"
-    if price < sma20_val and rsi_val <= 50:
-        return "Distribution"
-    return "Range"
-
-
-def setup_label(
-    price: float,
-    high20: float | None,
-    low20: float | None,
-    sma20_val: float | None,
-    rsi_val: float | None,
-    ret5: float | None,
-) -> str:
-    if high20 and price >= high20 * 0.995 and (rsi_val or 0) >= 58:
-        return "Breakout watch"
-    if low20 and price <= low20 * 1.01 and (rsi_val or 100) <= 42:
-        return "Breakdown risk"
-    if sma20_val and price > sma20_val and (ret5 or 0) > 1:
-        return "Momentum long"
-    if sma20_val and price < sma20_val and (ret5 or 0) < -1:
-        return "Trend weak"
-    return "Wait for setup"
-
-
-def relative_gap(left: float | None, right: float | None) -> float | None:
-    if left is None or right is None:
-        return None
-    return round(left - right, 2)
-
-
-def clamp(value: float, lower: float, upper: float) -> float:
-    return max(lower, min(upper, value))
-
-
-def score_band(value: float | None, positive_strong: float, positive_mild: float, negative_mild: float, negative_strong: float) -> int:
-    if value is None:
-        return 0
-    if value >= positive_strong:
-        return 2
-    if value >= positive_mild:
-        return 1
-    if value <= negative_strong:
-        return -2
-    if value <= negative_mild:
-        return -1
-    return 0
-
-
-def intraday_return(values: list[float], periods: int = 3) -> float | None:
-    if len(values) <= periods:
-        return None
-    prev = values[-periods - 1]
-    if not prev:
-        return None
-    return round((values[-1] - prev) / prev * 100, 2)
-
-
-def intraday_range_pct(values: list[float], periods: int = 12) -> float | None:
-    if len(values) < 2:
-        return None
-    window = values[-periods:] if len(values) >= periods else values
-    low = min(window)
-    high = max(window)
-    if not low:
-        return None
-    return round((high - low) / low * 100, 2)
-
-
-def implied_move_points(price: float | None, vix_price: float | None) -> tuple[float | None, float | None]:
-    if price is None or vix_price is None:
-        return None, None
-    move_pct = (vix_price / 100) / math.sqrt(252) * 100
-    move_points = price * move_pct / 100
-    return round(move_points, 2), round(move_pct, 2)
-
-
-def bias_from_score(score: int) -> tuple[str, str]:
-    if score >= 5:
-        return "Strong Long Bias", "bull"
-    if score >= 2:
-        return "Long Bias", "bull"
-    if score <= -5:
-        return "Strong Short Bias", "bear"
-    if score <= -2:
-        return "Short Bias", "bear"
-    return "Two-Way / Mean Reversion", "neutral"
-
-
-def day_type_from_context(score: int, vix_price: float | None, short_momentum: float | None, intraday_range: float | None) -> tuple[str, str]:
-    if abs(score) >= 5 and (vix_price or 0) < 16:
-        return "Trend Day", "Directional conditions are aligned and volatility is still controlled."
-    if abs(score) >= 4 and (vix_price or 0) >= 16:
-        return "Volatile Trend", "Directional edge exists, but option premium and reversals can be sharper."
-    if (vix_price or 0) >= 17 and (intraday_range or 0) >= 0.8:
-        return "High Gamma Two-Way", "Expect wider intraday swings and faster invalidation if momentum stalls."
-    if abs(short_momentum or 0) < 0.2 and (intraday_range or 0) < 0.5:
-        return "Range / Fade Day", "Momentum is not broad enough yet, so breakout follow-through is less reliable."
-    return "Rotation Day", "Leadership is shifting, so relative strength and confirmation matter more than raw direction."
-
-
-def conviction_from_score(score: int, data_points: int) -> int:
-    base = 42 + abs(score) * 8 + min(data_points, 8) * 2
-    return int(clamp(base, 35, 88))
-
-
-def format_level(value: float | None, prefix: str = "") -> str:
-    if value is None:
-        return "Unavailable"
-    return f"{prefix}{value:,.2f}"
-
-
-def sanitize_symbol_list(raw: str) -> list[str]:
-    seen, out = set(), []
-    for piece in (raw or "").split(","):
-        sym = re.sub(r"[^A-Z0-9&.-]", "", piece.upper().strip())
-        if sym and sym not in seen:
-            seen.add(sym)
-            out.append(sym)
-        if len(out) >= WATCHLIST_SYMBOL_LIMIT:
-            break
-    return out
-
-
-def symbol_directory_entry(symbol: str) -> dict | None:
-    clean = re.sub(r"[^A-Z0-9&.-]", "", (symbol or "").upper())
-    for item in SYMBOL_SUGGESTIONS:
-        if item["symbol"] == clean:
-            return item
-    return None
-
-
-def search_symbols(query: str, limit: int = 8) -> list[dict]:
-    q = (query or "").strip().upper()
-    if not q:
-        return SYMBOL_SUGGESTIONS[:limit]
-
-    ranked: list[tuple[int, dict]] = []
-    for item in SYMBOL_SUGGESTIONS:
-        symbol = item["symbol"]
-        name = item["name"].upper()
-        score = 0
-        if symbol.startswith(q):
-            score += 12
-        elif q in symbol:
-            score += 8
-        if name.startswith(q):
-            score += 10
-        elif q in name:
-            score += 6
-        if score:
-            ranked.append((score, item))
-    ranked.sort(key=lambda row: (-row[0], row[1]["symbol"]))
-    return [item for _, item in ranked[:limit]]
-
-
-def build_sector_news_scores(articles: list[dict]) -> dict[str, dict]:
-    scores: dict[str, dict] = defaultdict(lambda: {"score": 0.0, "count": 0, "bull": 0, "bear": 0})
-    now_ts = time.time()
-    for art in articles:
-        sector = art.get("sector") or "General"
-        sent = art.get("sentiment", {}).get("label", "neutral")
-        sign = 1 if sent == "bullish" else -1 if sent == "bearish" else 0
-        age_hours = max((now_ts - art.get("ts", now_ts)) / 3600, 0)
-        recency = max(0.35, 1.35 - (age_hours / 24))
-        weight = art.get("impact", 0) * recency
-        scores[sector]["score"] += sign * weight
-        scores[sector]["count"] += 1
-        if sent == "bullish":
-            scores[sector]["bull"] += 1
-        elif sent == "bearish":
-            scores[sector]["bear"] += 1
-    return {k: {"score": round(v["score"], 2), **v} for k, v in scores.items()}
-
-
-def sector_bias_label(score: float) -> tuple[str, str]:
-    if score >= 6:
-        return "Positive", "bull"
-    if score <= -6:
-        return "Negative", "bear"
-    return "Mixed", "neutral"
-
-
-def default_app_state() -> dict:
-    return {
-        "tickerSelections": list(DEFAULT_APP_STATE["tickerSelections"]),
-        "watchlist": list(DEFAULT_APP_STATE["watchlist"]),
-        "bookmarks": list(DEFAULT_APP_STATE["bookmarks"]),
-        "portfolio": dict(DEFAULT_APP_STATE["portfolio"]),
-    }
-
-
-def ensure_data_dir() -> None:
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-
-
-def db_connect(path: Path = STATE_DB_PATH) -> sqlite3.Connection:
-    ensure_data_dir()
-    conn = sqlite3.connect(path)
-    conn.row_factory = sqlite3.Row
-    return conn
-
-
-def init_state_db(path: Path = STATE_DB_PATH) -> None:
-    with db_connect(path) as conn:
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS app_state (
-                key TEXT PRIMARY KEY,
-                value TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-            )
-            """
-        )
-        conn.commit()
-
-
-def _db_get_record(key: str, path: Path = STATE_DB_PATH) -> tuple[bool, dict | list | str | int | float | None]:
-    init_state_db(path)
-    with db_connect(path) as conn:
-        row = conn.execute("SELECT value FROM app_state WHERE key = ?", (key,)).fetchone()
-    if row is None:
-        return False, None
-    return True, json.loads(row["value"])
-
-
-def db_get_json(key: str, default=None, path: Path = STATE_DB_PATH):
-    exists, value = _db_get_record(key, path)
-    return value if exists else default
-
-
-def db_set_json(key: str, value, path: Path = STATE_DB_PATH) -> None:
-    init_state_db(path)
-    with db_connect(path) as conn:
-        conn.execute(
-            """
-            INSERT INTO app_state(key, value, updated_at)
-            VALUES(?, ?, ?)
-            ON CONFLICT(key) DO UPDATE SET
-                value = excluded.value,
-                updated_at = excluded.updated_at
-            """,
-            (key, json.dumps(value), datetime.now(timezone.utc).isoformat()),
-        )
-        conn.commit()
-
-
-def sanitize_symbols(value, limit: int = WATCHLIST_SYMBOL_LIMIT) -> list[str]:
-    if isinstance(value, list):
-        pieces = value
-    else:
-        pieces = str(value or "").split(",")
-
-    seen, out = set(), []
-    for piece in pieces:
-        sym = re.sub(r"[^A-Z0-9&.-]", "", str(piece).upper().strip())
-        if sym and sym not in seen:
-            seen.add(sym)
-            out.append(sym)
-        if len(out) >= limit:
-            break
-    return out
-
-
-def sanitize_bookmarks(value) -> list[str]:
-    if not isinstance(value, list):
-        return []
-    seen, out = set(), []
-    for piece in value:
-        cleaned = re.sub(r"[^A-Za-z0-9_-]", "", str(piece).strip())[:64]
-        if cleaned and cleaned not in seen:
-            seen.add(cleaned)
-            out.append(cleaned)
-        if len(out) >= 500:
-            break
-    return out
-
-
-def sanitize_portfolio(value) -> dict[str, dict[str, float]]:
-    if not isinstance(value, dict):
-        return {}
-    out = {}
-    for raw_symbol, raw_entry in value.items():
-        symbol = sanitize_symbols([raw_symbol], limit=1)
-        if not symbol or not isinstance(raw_entry, dict):
-            continue
-        qty = safe_float(raw_entry.get("qty"), default=0.0)
-        buy_price = safe_float(raw_entry.get("buyPrice"), default=0.0)
-        if qty <= 0 or buy_price <= 0:
-            continue
-        out[symbol[0]] = {
-            "qty": round(qty, 4),
-            "buyPrice": round(buy_price, 2),
-        }
-        if len(out) >= WATCHLIST_SYMBOL_LIMIT:
-            break
-    return out
-
-
-def sanitize_state_patch(payload: dict | None) -> dict:
-    payload = payload or {}
-    clean = {}
-    if "tickerSelections" in payload:
-        clean["tickerSelections"] = sanitize_symbols(payload.get("tickerSelections"), WATCHLIST_SYMBOL_LIMIT)
-    if "watchlist" in payload:
-        clean["watchlist"] = sanitize_symbols(payload.get("watchlist"), WATCHLIST_SYMBOL_LIMIT)
-    if "bookmarks" in payload:
-        clean["bookmarks"] = sanitize_bookmarks(payload.get("bookmarks"))
-    if "portfolio" in payload:
-        clean["portfolio"] = sanitize_portfolio(payload.get("portfolio"))
-    return clean
-
-
-def load_persisted_app_state(path: Path = STATE_DB_PATH) -> tuple[dict, bool]:
-    state = default_app_state()
-    has_stored_state = False
-    for key in DEFAULT_APP_STATE:
-        exists, value = _db_get_record(key, path)
-        if not exists:
-            continue
-        has_stored_state = True
-        clean = sanitize_state_patch({key: value})
-        if key in clean:
-            state[key] = clean[key]
-    return state, has_stored_state
-
-
-def load_refresh_settings(path: Path = STATE_DB_PATH) -> int:
-    settings = db_get_json("settings", default={}, path=path)
-    if not isinstance(settings, dict):
-        return 300
-    seconds = int(settings.get("refreshInterval", 300) or 300)
-    return seconds if seconds in ALLOWED_REFRESH_WINDOWS else 300
-
-
-def persist_refresh_settings(seconds: int, path: Path = STATE_DB_PATH) -> None:
-    db_set_json("settings", {"refreshInterval": seconds}, path=path)
-
-
-def persist_upstox_oauth_state(state: str, path: Path = STATE_DB_PATH) -> None:
-    db_set_json(
-        UPSTOX_AUTH_STATE_KEY,
-        {"state": state, "createdAt": datetime.now(timezone.utc).isoformat()},
-        path=path,
+        import websocket  # noqa: F401
+    except ImportError:
+        return False
+    return True
+
+
+def upstox_stream_authorized_redirect_uri() -> str:
+    response = http_session().get(
+        stream_authorize_url(upstox_v3_api_base()),
+        headers={
+            "Accept": "application/json",
+            "Authorization": f"Bearer {upstox_access_token()}",
+        },
+        timeout=8,
     )
-
-
-def load_upstox_oauth_state(path: Path = STATE_DB_PATH) -> str:
-    record = db_get_json(UPSTOX_AUTH_STATE_KEY, default={}, path=path)
-    if not isinstance(record, dict):
-        return ""
-    return str(record.get("state", "")).strip()
-
-
-def upstox_token_preview(token: str) -> str:
-    token = (token or "").strip()
-    if len(token) <= 8:
-        return token
-    return f"{token[:4]}...{token[-4:]}"
+    response.raise_for_status()
+    payload = response.json()
+    uri = str((payload.get("data") or {}).get("authorized_redirect_uri") or "").strip()
+    if not uri:
+        raise RuntimeError("Upstox V3 authorize response did not include authorized_redirect_uri")
+    return uri
 
 
 def upstox_integration_status() -> dict:
@@ -1373,6 +679,7 @@ def upstox_integration_status() -> dict:
         "staticIpConfigured": bool(os.environ.get("UPSTOX_PRIMARY_IP", "").strip()),
         "staticIpSyncReady": bool(os.environ.get("UPSTOX_PRIMARY_IP", "").strip() and token),
         "storedAt": record.get("issued_at") if isinstance(record, dict) else None,
+        "stream": upstox_stream_runtime_status(),
         "dataDir": str(DATA_DIR),
     }
 
@@ -1591,6 +898,7 @@ def update_app_state(payload: dict | None) -> dict:
         _has_persisted_state = True
 
     persist_app_state(merged)
+    _upstox_stream_wakeup.set()
     try:
         refresh_tracked_symbol_quotes(merged)
         rebuild_computed_payloads()
@@ -1627,18 +935,36 @@ def format_quotes_for_client(quotes: dict[str, dict], status: dict | None = None
 
 
 def refresh_quote_cache_for_symbols(symbols: list[str]) -> dict[str, dict]:
-    quotes = {}
-    if not symbols:
-        return quotes
+    clean_symbols = []
+    for sym in symbols:
+        normalized = re.sub(r"[^A-Z0-9&.-]", "", (sym or "").upper())
+        if normalized and normalized not in clean_symbols:
+            clean_symbols.append(normalized)
+    if not clean_symbols:
+        return {}
 
-    def quote_worker(sym: str) -> tuple[str, dict | None]:
+    if active_market_data_provider() == UPSTOX_PROVIDER_NAME:
+        label_to_key = {
+            sym: key
+            for sym in clean_symbols
+            if (key := upstox_instrument_key_for_symbol(sym))
+        }
+        quotes = fetch_upstox_quotes_by_label(label_to_key) if label_to_key else {}
+        if not upstox_fallback_enabled():
+            return quotes
+        pending_symbols = [sym for sym in clean_symbols if sym not in quotes]
+    else:
+        quotes = {}
+        pending_symbols = list(clean_symbols)
+
+    def nse_worker(sym: str) -> tuple[str, dict | None]:
         try:
-            return sym, fetch_live_quote(sym)
+            return sym, _fetch_nse_quote(sym)
         except Exception:
             return sym, None
 
-    with ThreadPoolExecutor(max_workers=min(MAX_QUOTE_WORKERS, len(symbols))) as executor:
-        futures = [executor.submit(quote_worker, sym) for sym in symbols]
+    with ThreadPoolExecutor(max_workers=min(MAX_QUOTE_WORKERS, len(pending_symbols) or 1)) as executor:
+        futures = [executor.submit(nse_worker, sym) for sym in pending_symbols]
         for future in as_completed(futures):
             sym, quote = future.result()
             if quote:
@@ -1743,6 +1069,10 @@ def background_threads_enabled() -> bool:
     return "unittest" not in sys.modules and "pytest" not in sys.modules
 
 
+def external_worker_mode() -> bool:
+    return os.environ.get("MARKET_DESK_DISABLE_THREADS", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 def start_background_workers() -> bool:
     global _background_threads_started
     if not background_threads_enabled():
@@ -1752,8 +1082,47 @@ def start_background_workers() -> bool:
             return False
         threading.Thread(target=refresh_loop, daemon=True, name="market-desk-refresh").start()
         threading.Thread(target=ticker_loop, daemon=True, name="market-desk-ticker").start()
+        threading.Thread(target=upstox_stream_loop, daemon=True, name="market-desk-upstox-v3").start()
         _background_threads_started = True
         return True
+
+
+def persist_runtime_news_payload(articles: list[dict], feed_status: dict, updated: str, refreshed_at: float) -> None:
+    try:
+        db_set_json(
+            RUNTIME_NEWS_STATE_KEY,
+            {
+                "articles": articles,
+                "feedStatus": feed_status,
+                "updated": updated,
+                "lastNewsRefreshTs": refreshed_at,
+                "aiSummaryProgress": ai_summary_progress_for_articles(articles),
+            },
+        )
+    except Exception as exc:
+        print(f"[!] runtime news persist error: {exc}")
+
+
+def persist_runtime_snapshot_payload() -> None:
+    try:
+        db_set_json(RUNTIME_SNAPSHOT_STATE_KEY, market_data_snapshot(include_history=True))
+    except Exception as exc:
+        print(f"[!] runtime snapshot persist error: {exc}")
+
+
+def runtime_news_payload_from_db() -> dict | None:
+    payload = db_get_json(RUNTIME_NEWS_STATE_KEY, default=None)
+    return payload if isinstance(payload, dict) else None
+
+
+def runtime_snapshot_from_db(include_history: bool = False) -> dict | None:
+    payload = db_get_json(RUNTIME_SNAPSHOT_STATE_KEY, default=None)
+    if not isinstance(payload, dict):
+        return None
+    if not include_history:
+        payload = dict(payload)
+        payload.pop("history", None)
+    return payload
 
 
 # ── Network helpers ────────────────────────────────────────────────────────
@@ -1766,6 +1135,125 @@ def _get_feed(url: str) -> bytes:
     r = http_session().get(url, headers=headers, timeout=8)
     r.raise_for_status()
     return r.content
+
+
+def handle_ai_article_analysis_applied(article: dict) -> None:
+    article_id = str(article.get("id") or "")
+    with _lock:
+        article_is_live = bool(article_id) and any(str(current.get("id") or "") == article_id for current in _arts)
+        articles = list(_arts)
+        feed_status = dict(_feed_status)
+        updated = _updated
+        refreshed_at = _last_news_refresh_ts or time.time()
+    if not article_is_live:
+        return
+    try:
+        rebuild_computed_payloads()
+        persist_runtime_news_payload(articles, feed_status, updated, refreshed_at)
+        persist_runtime_snapshot_payload()
+        broadcast_market_snapshot()
+    except Exception as exc:
+        print(f"[!] AI analytics refresh error: {exc}")
+
+
+def ai_summary_service() -> NewsAiSummaryService:
+    global _ai_summary_service
+    if _ai_summary_service is None:
+        _ai_summary_service = NewsAiSummaryService(
+            http_session_factory=http_session,
+            load_persisted_summary=load_persisted_ai_news_summary,
+            load_persisted_analysis=load_persisted_ai_news_analysis,
+            persist_summary=persist_ai_news_summary,
+            persist_analysis=persist_ai_news_analysis,
+            articles_factory=lambda: _arts,
+            articles_lock=_lock,
+            on_analysis_applied=handle_ai_article_analysis_applied,
+        )
+    return _ai_summary_service
+
+
+def ollama_api_base() -> str:
+    return ai_summary_service().ollama_api_base()
+
+
+def ai_news_summary_model() -> str:
+    return ai_summary_service().ai_news_summary_model()
+
+
+def ai_news_summaries_enabled() -> bool:
+    return ai_summary_service().ai_news_summaries_enabled()
+
+
+def article_extraction_enabled() -> bool:
+    return ai_summary_service().article_extraction_enabled()
+
+
+def article_link_supports_direct_extraction(link: str) -> bool:
+    return ai_summary_service().article_link_supports_direct_extraction(link)
+
+
+def fetch_accessible_article_text(article: dict) -> str:
+    return ai_summary_service().fetch_accessible_article_text(article)
+
+
+def prepare_article_for_ai_summary(article: dict) -> dict:
+    return ai_summary_service().prepare_article_for_ai_summary(article)
+
+
+def truncate_ai_summary_input(text: str) -> str:
+    return ai_summary_service().truncate_ai_summary_input(text)
+
+
+def ai_summary_cache_key(article: dict) -> str:
+    return ai_summary_service().ai_summary_cache_key(article)
+
+
+def ai_analysis_cache_key(article: dict) -> str:
+    return ai_summary_service().ai_analysis_cache_key(article)
+
+
+def get_cached_ai_news_summary(cache_key: str) -> str:
+    return ai_summary_service().get_cached_ai_news_summary(cache_key)
+
+
+def article_is_in_ai_summary_window(article: dict, now: float | None = None) -> bool:
+    return ai_summary_service().article_is_in_ai_summary_window(article, now)
+
+
+def article_has_ai_summary(article: dict) -> bool:
+    return ai_summary_service().article_has_ai_summary(article)
+
+
+def ai_summary_update_payload(article: dict) -> dict:
+    return ai_summary_service().ai_summary_update_payload(article)
+
+
+def hydrate_article_from_ai_cache(article: dict) -> bool:
+    return ai_summary_service().hydrate_article_from_ai_cache(article)
+
+
+def ai_summary_progress_for_articles(articles: list[dict], now: float | None = None) -> dict:
+    return ai_summary_service().ai_summary_progress_for_articles(articles, now)
+
+
+def ai_summary_executor() -> ThreadPoolExecutor:
+    return ai_summary_service().ai_summary_executor_instance()
+
+
+def apply_ai_summary_to_article(article: dict, summary: str) -> None:
+    ai_summary_service().apply_ai_summary_to_article(article, summary)
+
+
+def generate_ai_news_summary(article: dict) -> str:
+    return ai_summary_service().generate_ai_news_summary(article)
+
+
+def queue_ai_news_summary(article: dict) -> None:
+    ai_summary_service().queue_ai_news_summary(article)
+
+
+def enrich_articles_with_ai_summaries(articles: list[dict]) -> None:
+    ai_summary_service().enrich_articles_with_ai_summaries(articles)
 
 
 def _nse_init_session(force: bool = False) -> requests.Session:
@@ -1889,38 +1377,18 @@ def _yahoo_price(sym: str) -> tuple[float, float, float]:
         raise
 
 
-def parse_upstox_instrument_overrides(raw: str | None = None) -> dict[str, str]:
-    raw = os.environ.get("UPSTOX_INSTRUMENT_KEYS", "") if raw is None else raw
-    raw = (raw or "").strip()
-    if not raw:
-        return {}
-    try:
-        parsed = json.loads(raw)
-        if isinstance(parsed, dict):
-            return {
-                re.sub(r"[^A-Z0-9&. -]", "", str(symbol).upper()).strip(): str(key).strip()
-                for symbol, key in parsed.items()
-                if str(symbol).strip() and str(key).strip()
-            }
-    except Exception:
-        pass
-
-    out = {}
-    for piece in re.split(r"[;,]", raw):
-        if "=" not in piece:
-            continue
-        symbol, key = piece.split("=", 1)
-        symbol = re.sub(r"[^A-Z0-9&. -]", "", symbol.upper()).strip()
-        key = key.strip()
-        if symbol and key:
-            out[symbol] = key
-    return out
-
-
-def upstox_instrument_key_for_symbol(symbol: str) -> str | None:
-    clean = re.sub(r"[^A-Z0-9&.-]", "", (symbol or "").upper())
-    overrides = parse_upstox_instrument_overrides()
-    return overrides.get(clean) or UPSTOX_DEFAULT_INSTRUMENT_KEYS.get(clean)
+def upstox_stream_subscription_map(state: dict | None = None) -> dict[str, str]:
+    state = state or get_app_state_copy()
+    labels = dict(UPSTOX_INDEX_INSTRUMENT_KEYS)
+    for sym in NSE_STOCKS.values():
+        key = upstox_instrument_key_for_symbol(sym)
+        if key:
+            labels[sym] = key
+    for sym in tracked_symbols_for_state(state):
+        key = upstox_instrument_key_for_symbol(sym)
+        if key:
+            labels[sym] = key
+    return labels
 
 
 def upstox_headers() -> dict[str, str]:
@@ -1960,65 +1428,25 @@ def upstox_auth_token_request(code: str) -> dict:
     return payload
 
 
-def parse_upstox_timestamp(value, default_ts: float) -> float:
-    if value is None or value == "":
-        return default_ts
-    try:
-        if isinstance(value, (int, float)):
-            number = float(value)
-            return number / 1000 if number > 10_000_000_000 else number
-        text = str(value).strip()
-        if text.isdigit():
-            number = float(text)
-            return number / 1000 if number > 10_000_000_000 else number
-        return datetime.fromisoformat(text.replace("Z", "+00:00")).timestamp()
-    except Exception:
-        return default_ts
-
-
-def upstox_quote_from_payload(label: str, payload: dict, received_at: float) -> dict | None:
-    ohlc = payload.get("ohlc") or {}
-    last = safe_float(payload.get("last_price", payload.get("ltp")))
-    if not last:
-        return None
-    previous_close = safe_float(ohlc.get("close", payload.get("close_price")), last)
-    net_change = payload.get("net_change")
-    change = safe_float(net_change, last - previous_close)
-    pct = round((change / previous_close * 100) if previous_close else 0, 2)
-    fetched_at = parse_upstox_timestamp(
-        payload.get("timestamp") or payload.get("last_trade_time"),
-        received_at,
-    )
-    directory_entry = symbol_directory_entry(label)
-    name = (
-        payload.get("symbol")
-        or payload.get("trading_symbol")
-        or (directory_entry or {}).get("name")
-        or label
-    )
-    depth = payload.get("depth") or {}
-    best_bid = (depth.get("buy") or [{}])[0] if isinstance(depth.get("buy"), list) else {}
-    best_ask = (depth.get("sell") or [{}])[0] if isinstance(depth.get("sell"), list) else {}
-    quote = {
-        "symbol": label,
-        "name": name,
-        "price": round(last, 2),
-        "previous_close": round(previous_close, 2),
-        "change": round(change, 2),
-        "pct": pct,
-        "day_high": round(safe_float(ohlc.get("high"), last), 2),
-        "day_low": round(safe_float(ohlc.get("low"), last), 2),
-        "open": round(safe_float(ohlc.get("open"), last), 2),
-        "volume": safe_float(payload.get("volume")),
-        "oi": safe_float(payload.get("oi")),
-        "bid": safe_float(best_bid.get("price")),
-        "ask": safe_float(best_ask.get("price")),
-        "fetchedAt": fetched_at,
-        "receivedAt": received_at,
-        "source": "Upstox",
-        "instrumentKey": payload.get("instrument_token") or payload.get("instrument_key"),
-    }
-    return quote
+def fetch_upstox_stream_quotes_by_label(label_to_key: dict[str, str]) -> dict[str, dict]:
+    if not label_to_key:
+        return {}
+    now = time.time()
+    stale_after = upstox_stream_stale_after()
+    out = {}
+    with _lock:
+        for label, key in label_to_key.items():
+            cached = _upstox_stream_quote_cache.get(key)
+            if not cached:
+                continue
+            quote = cached[0]
+            age = quote_age_seconds(quote, now)
+            if age is None or age > stale_after:
+                continue
+            if quote.get("symbol") != label:
+                quote = dict(quote, symbol=label)
+            out[label] = quote
+    return out
 
 
 def fetch_upstox_quotes_by_label(label_to_key: dict[str, str]) -> dict[str, dict]:
@@ -2027,10 +1455,10 @@ def fetch_upstox_quotes_by_label(label_to_key: dict[str, str]) -> dict[str, dict
 
     now = time.time()
     ttl = nse_quote_cache_ttl()
-    out: dict[str, dict] = {}
+    out: dict[str, dict] = fetch_upstox_stream_quotes_by_label(label_to_key)
     pending: dict[str, str] = {}
     for label, key in label_to_key.items():
-        if not key:
+        if not key or label in out:
             continue
         cache_key = f"{label}|{key}"
         cached = _upstox_quote_cache.get(cache_key)
@@ -2039,37 +1467,37 @@ def fetch_upstox_quotes_by_label(label_to_key: dict[str, str]) -> dict[str, dict
         else:
             pending[label] = key
 
-    if not pending:
-        return out
+    while pending:
+        labels = list(pending.keys())[:UPSTOX_QUOTE_BATCH_LIMIT]
+        keys = [pending[label] for label in labels]
+        key_to_label = {pending[label]: label for label in labels}
+        response = http_session().get(
+            f"{upstox_api_base()}/market-quote/quotes",
+            params={"instrument_key": ",".join(keys)},
+            headers=upstox_headers(),
+            timeout=8,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        if payload.get("status") not in {None, "success"}:
+            raise RuntimeError(f"Upstox quote request failed: {payload.get('status')}")
 
-    labels = list(pending.keys())[:UPSTOX_QUOTE_BATCH_LIMIT]
-    keys = [pending[label] for label in labels]
-    key_to_label = {pending[label]: label for label in labels}
-    response = http_session().get(
-        f"{upstox_api_base()}/market-quote/quotes",
-        params={"instrument_key": ",".join(keys)},
-        headers=upstox_headers(),
-        timeout=8,
-    )
-    response.raise_for_status()
-    payload = response.json()
-    if payload.get("status") not in {None, "success"}:
-        raise RuntimeError(f"Upstox quote request failed: {payload.get('status')}")
-
-    for quote_payload in (payload.get("data") or {}).values():
-        instrument_key = quote_payload.get("instrument_token") or quote_payload.get("instrument_key")
-        label = key_to_label.get(instrument_key)
-        if not label:
-            symbol = re.sub(r"[^A-Z0-9&.-]", "", str(quote_payload.get("symbol", "")).upper())
-            label = symbol if symbol in pending else None
-        if not label:
-            continue
-        quote = upstox_quote_from_payload(label, quote_payload, now)
-        if not quote:
-            continue
-        cache_key = f"{label}|{pending[label]}"
-        _upstox_quote_cache[cache_key] = (quote, now)
-        out[label] = quote
+        for quote_payload in (payload.get("data") or {}).values():
+            instrument_key = quote_payload.get("instrument_token") or quote_payload.get("instrument_key")
+            label = key_to_label.get(instrument_key)
+            if not label:
+                symbol = re.sub(r"[^A-Z0-9&.-]", "", str(quote_payload.get("symbol", "")).upper())
+                label = symbol if symbol in pending else None
+            if not label:
+                continue
+            quote = upstox_quote_from_payload(label, quote_payload, now)
+            if not quote:
+                continue
+            cache_key = f"{label}|{pending[label]}"
+            _upstox_quote_cache[cache_key] = (quote, now)
+            out[label] = quote
+        for label in labels:
+            pending.pop(label, None)
     return out
 
 
@@ -2085,6 +1513,150 @@ def fetch_upstox_index_quotes() -> dict[str, dict]:
     return fetch_upstox_quotes_by_label(dict(UPSTOX_INDEX_INSTRUMENT_KEYS))
 
 
+def _set_upstox_stream_status(**patch) -> None:
+    with _lock:
+        _upstox_stream_status.update(patch)
+
+
+def _clear_upstox_stream_cache() -> None:
+    with _lock:
+        _upstox_stream_quote_cache.clear()
+
+
+def _send_upstox_stream_request(ws, method: str, instrument_keys: list[str], mode: str = UPSTOX_STREAM_MODE) -> None:
+    if not instrument_keys:
+        return
+    ws.send_binary(build_stream_request(method, instrument_keys, guid=secrets.token_hex(12), mode=mode))
+
+
+def _apply_upstox_stream_payload(payload: dict, label_by_key: dict[str, str]) -> None:
+    current_ts = payload.get("currentTs") or int(time.time() * 1000)
+    message_type = payload.get("type")
+    if message_type == "market_info":
+        _set_upstox_stream_status(
+            lastMessageAt=time.time(),
+            segmentStatus=((payload.get("marketInfo") or {}).get("segmentStatus") or {}),
+            lastError=None,
+        )
+        return
+    if message_type not in {"live_feed", "initial_feed"}:
+        return
+
+    updates: dict[str, tuple[dict, float]] = {}
+    for instrument_key, feed in (payload.get("feeds") or {}).items():
+        label = label_by_key.get(instrument_key, instrument_key)
+        directory_entry = symbol_directory_entry(label)
+        quote = stream_quote_from_feed(
+            label,
+            instrument_key,
+            feed or {},
+            current_ts,
+            name=(directory_entry or {}).get("name") or label,
+        )
+        if quote:
+            updates[instrument_key] = (quote, time.time())
+
+    if updates:
+        with _lock:
+            _upstox_stream_quote_cache.update(updates)
+            _upstox_stream_status["lastMessageAt"] = time.time()
+            _upstox_stream_status["lastError"] = None
+
+
+def upstox_stream_loop() -> None:
+    while True:
+        desired = upstox_stream_subscription_map()
+        dependency_ready = upstox_stream_dependencies_ready()
+        _set_upstox_stream_status(
+            dependencyReady=dependency_ready,
+            desiredSubscriptions=len({key for key in desired.values() if key}),
+            mode=UPSTOX_STREAM_MODE,
+        )
+        if requested_market_data_provider() != UPSTOX_PROVIDER_NAME or not upstox_access_token():
+            _set_upstox_stream_status(connected=False, activeSubscriptions=0)
+            _upstox_stream_wakeup.wait(timeout=10)
+            _upstox_stream_wakeup.clear()
+            continue
+        if not dependency_ready:
+            _set_upstox_stream_status(
+                connected=False,
+                activeSubscriptions=0,
+                lastError="Install websocket-client to enable Upstox V3 streaming",
+            )
+            _upstox_stream_wakeup.wait(timeout=30)
+            _upstox_stream_wakeup.clear()
+            continue
+
+        ws = None
+        try:
+            import websocket
+            from websocket import WebSocketConnectionClosedException, WebSocketTimeoutException
+
+            uri = upstox_stream_authorized_redirect_uri()
+            ws = websocket.create_connection(
+                uri,
+                timeout=10,
+                enable_multithread=True,
+                sslopt={"ca_certs": certifi.where()},
+            )
+            ws.settimeout(1)
+            _set_upstox_stream_status(
+                connected=True,
+                lastConnectAt=time.time(),
+                lastError=None,
+                activeSubscriptions=0,
+            )
+            active_keys: set[str] = set()
+
+            while requested_market_data_provider() == UPSTOX_PROVIDER_NAME and upstox_access_token():
+                desired = upstox_stream_subscription_map()
+                label_by_key = {key: label for label, key in desired.items() if key}
+                desired_keys = set(label_by_key.keys())
+                additions = sorted(desired_keys - active_keys)
+                removals = sorted(active_keys - desired_keys)
+                if removals:
+                    _send_upstox_stream_request(ws, "unsub", removals)
+                    active_keys -= set(removals)
+                if additions:
+                    _send_upstox_stream_request(ws, "sub", additions)
+                    active_keys |= set(additions)
+                _set_upstox_stream_status(
+                    desiredSubscriptions=len(desired_keys),
+                    activeSubscriptions=len(active_keys),
+                )
+
+                try:
+                    frame = ws.recv()
+                except WebSocketTimeoutException:
+                    if _upstox_stream_wakeup.wait(timeout=0.2):
+                        _upstox_stream_wakeup.clear()
+                    continue
+                except WebSocketConnectionClosedException as exc:
+                    raise RuntimeError(f"Upstox V3 socket closed: {exc}") from exc
+
+                if frame is None:
+                    continue
+                payload = decode_feed_response(frame.encode("utf-8") if isinstance(frame, str) else frame)
+                _apply_upstox_stream_payload(payload, label_by_key)
+                if _upstox_stream_wakeup.is_set():
+                    _upstox_stream_wakeup.clear()
+        except Exception as exc:
+            _set_upstox_stream_status(
+                connected=False,
+                lastDisconnectAt=time.time(),
+                activeSubscriptions=0,
+                lastError=str(exc)[:240],
+            )
+            time.sleep(UPSTOX_STREAM_RECONNECT_SECONDS)
+        finally:
+            if ws is not None:
+                try:
+                    ws.close()
+                except Exception:
+                    pass
+            _set_upstox_stream_status(connected=False, lastDisconnectAt=time.time(), activeSubscriptions=0)
+
+
 def fetch_live_quote(symbol: str) -> dict | None:
     if active_market_data_provider() == UPSTOX_PROVIDER_NAME:
         try:
@@ -2096,91 +1668,6 @@ def fetch_live_quote(symbol: str) -> dict | None:
         if not upstox_fallback_enabled():
             return None
     return _fetch_nse_quote(symbol)
-
-
-def option_underlying_key(underlying: str) -> str | None:
-    clean = re.sub(r"[^A-Z0-9 ]", "", (underlying or "").upper()).strip()
-    overrides = parse_upstox_instrument_overrides()
-    return overrides.get(clean) or UPSTOX_OPTION_UNDERLYINGS.get(clean)
-
-
-def summarize_upstox_option_chain(rows: list[dict], underlying: str, expiry_date: str, max_rows: int = 80) -> dict:
-    spot = None
-    compact_rows = []
-    total_call_oi = total_put_oi = 0.0
-    total_call_prev_oi = total_put_prev_oi = 0.0
-    max_call = {"strike": None, "oi": -1.0}
-    max_put = {"strike": None, "oi": -1.0}
-
-    for row in rows or []:
-        strike = safe_float(row.get("strike_price"))
-        spot = safe_float(row.get("underlying_spot_price"), spot or 0.0) or spot
-        call_md = (row.get("call_options") or {}).get("market_data") or {}
-        put_md = (row.get("put_options") or {}).get("market_data") or {}
-        call_greeks = (row.get("call_options") or {}).get("option_greeks") or {}
-        put_greeks = (row.get("put_options") or {}).get("option_greeks") or {}
-        call_oi = safe_float(call_md.get("oi"))
-        put_oi = safe_float(put_md.get("oi"))
-        call_prev_oi = safe_float(call_md.get("prev_oi"))
-        put_prev_oi = safe_float(put_md.get("prev_oi"))
-        total_call_oi += call_oi
-        total_put_oi += put_oi
-        total_call_prev_oi += call_prev_oi
-        total_put_prev_oi += put_prev_oi
-        if call_oi > max_call["oi"]:
-            max_call = {"strike": strike, "oi": call_oi}
-        if put_oi > max_put["oi"]:
-            max_put = {"strike": strike, "oi": put_oi}
-        compact_rows.append({
-            "strike": strike,
-            "call": {
-                "ltp": safe_float(call_md.get("ltp")),
-                "oi": call_oi,
-                "changeInOi": call_oi - call_prev_oi,
-                "volume": safe_float(call_md.get("volume")),
-                "bid": safe_float(call_md.get("bid_price")),
-                "ask": safe_float(call_md.get("ask_price")),
-                "iv": safe_float(call_greeks.get("iv")),
-                "delta": safe_float(call_greeks.get("delta")),
-            },
-            "put": {
-                "ltp": safe_float(put_md.get("ltp")),
-                "oi": put_oi,
-                "changeInOi": put_oi - put_prev_oi,
-                "volume": safe_float(put_md.get("volume")),
-                "bid": safe_float(put_md.get("bid_price")),
-                "ask": safe_float(put_md.get("ask_price")),
-                "iv": safe_float(put_greeks.get("iv")),
-                "delta": safe_float(put_greeks.get("delta")),
-            },
-        })
-
-    if spot:
-        compact_rows.sort(key=lambda row: abs(row["strike"] - spot))
-    else:
-        compact_rows.sort(key=lambda row: row["strike"])
-    limited_rows = sorted(compact_rows[:max_rows], key=lambda row: row["strike"])
-    call_change = total_call_oi - total_call_prev_oi
-    put_change = total_put_oi - total_put_prev_oi
-    pcr = round(total_put_oi / total_call_oi, 2) if total_call_oi else None
-    return {
-        "provider": "Upstox",
-        "underlying": underlying,
-        "expiry": expiry_date,
-        "generatedAt": ist_now().isoformat(),
-        "summary": {
-            "spot": round_or_none(spot),
-            "pcr": pcr,
-            "totalCallOi": round(total_call_oi),
-            "totalPutOi": round(total_put_oi),
-            "callOiChange": round(call_change),
-            "putOiChange": round(put_change),
-            "maxCallOiStrike": max_call["strike"],
-            "maxPutOiStrike": max_put["strike"],
-            "flowBias": "Put writing support" if put_change > call_change else "Call writing pressure" if call_change > put_change else "Balanced",
-        },
-        "rows": limited_rows,
-    }
 
 
 def fetch_upstox_option_chain(underlying: str, expiry_date: str, max_rows: int = 80) -> dict:
@@ -2343,7 +1830,8 @@ def build_symbol_signal(symbol: str, live_quote: dict | None = None, is_index: b
     vol20 = realized_vol(closes, 20)
     high20 = max(highs[-20:]) if len(highs) >= 20 else max(highs)
     low20 = min(lows[-20:]) if len(lows) >= 20 else min(lows)
-    avg_vol20 = mean(volumes[-20:]) if len(volumes) >= 20 else mean(volumes)
+    volume_window = volumes[-20:] if len(volumes) >= 20 else volumes
+    avg_vol20 = sum(volume_window) / len(volume_window) if volume_window else 0
     volume_ratio = (volumes[-1] / avg_vol20) if avg_vol20 else None
 
     support = None
@@ -2398,7 +1886,7 @@ def fetch_feed_articles(feed_cfg: dict[str, str]) -> tuple[str, dict, list[dict]
             publisher = strip_html(source_meta.get("title", "")) if hasattr(source_meta, "get") else ""
             publisher = publisher or feed_publisher_label(src)
             title = clean_headline(e.get("title", ""), publisher)
-            summary = clean_summary(e.get("summary", e.get("description", "")), publisher)[:480]
+            summary = build_article_preview(title, e.get("summary", e.get("description", "")), publisher)
             link = e.get("link", "#")
             h = url_hash(link) if link != "#" else url_hash(title[:60])
             if not title:
@@ -2424,6 +1912,7 @@ def fetch_feed_articles(feed_cfg: dict[str, str]) -> tuple[str, dict, list[dict]
                 "title": title,
                 "titleKey": normalized_headline(title),
                 "summary": summary,
+                "sourceSummary": summary,
                 "link": link,
                 "source": publisher,
                 "feed": src,
@@ -2459,6 +1948,7 @@ def fetch_news() -> tuple[list[dict], dict]:
                 out.append(article)
 
     out.sort(key=lambda x: -x["ts"])
+    enrich_articles_with_ai_summaries(out)
     return out, status
 
 
@@ -2527,31 +2017,19 @@ def fetch_tickers() -> tuple[dict, dict]:
     except Exception as e:
         print(f"[!] NSE allIndices: {e}")
 
-    # NSE individual stocks
-    def stock_worker(item: tuple[str, str]) -> tuple[str, str, dict | None, Exception | None]:
-        label, sym = item
-        try:
-            return label, sym, fetch_live_quote(sym), None
-        except Exception as exc:
-            return label, sym, None, exc
-
-    with ThreadPoolExecutor(max_workers=min(MAX_QUOTE_WORKERS, len(NSE_STOCKS))) as executor:
-        futures = [executor.submit(stock_worker, item) for item in NSE_STOCKS.items()]
-        for future in as_completed(futures):
-            label, sym, quote, error = future.result()
-            if error:
-                print(f"[!] NSE {sym}: {error}")
-                continue
-            if quote:
-                out[label] = {
-                    "price": quote["price"],
-                    "change": quote["change"],
-                    "pct": quote["pct"],
-                    "live": True,
-                    "sym": "Rs",
-                    "fetchedAt": quote.get("fetchedAt", fetched_at),
-                    "source": quote.get("source", "NSE"),
-                }
+    stock_quotes = refresh_quote_cache_for_symbols(list(NSE_STOCKS.values()))
+    for label, sym in NSE_STOCKS.items():
+        quote = stock_quotes.get(sym)
+        if quote:
+            out[label] = {
+                "price": quote["price"],
+                "change": quote["change"],
+                "pct": quote["pct"],
+                "live": True,
+                "sym": "Rs",
+                "fetchedAt": quote.get("fetchedAt", fetched_at),
+                "source": quote.get("source", "NSE"),
+            }
 
     # Yahoo extras with cache
     def yahoo_worker(item: tuple[str, tuple[str, str]]) -> tuple[str, str, str, tuple[float, float, float] | None, Exception | None]:
@@ -3147,7 +2625,7 @@ def build_derivatives_analysis_payload(
 
 
 # ── Background loops ───────────────────────────────────────────────────────
-def broadcast_tickers(data: dict) -> None:
+def broadcast_market_snapshot() -> None:
     payload = "data:" + json.dumps(market_data_snapshot(include_history=False)) + "\n\n"
     with _sse_lock:
         dead = []
@@ -3161,6 +2639,10 @@ def broadcast_tickers(data: dict) -> None:
                 _sse_queues.remove(q)
             except ValueError:
                 pass
+
+
+def broadcast_tickers(data: dict) -> None:
+    broadcast_market_snapshot()
 
 
 def _update_price_history(ticks: dict) -> None:
@@ -3188,6 +2670,8 @@ def refresh_loop() -> None:
                 _updated = ist_now().strftime("%H:%M:%S")
                 _last_news_refresh_ts = refreshed_at
             rebuild_computed_payloads()
+            persist_runtime_news_payload(arts, fstatus, _updated, refreshed_at)
+            persist_runtime_snapshot_payload()
             print(f"[+] {len(arts)} articles | {_updated}")
         except Exception as e:
             print(f"[!] refresh_loop error: {e}")
@@ -3210,6 +2694,7 @@ def ticker_loop() -> None:
             _update_price_history(ticks)
             refresh_tracked_symbol_quotes()
             rebuild_computed_payloads()
+            persist_runtime_snapshot_payload()
             broadcast_tickers(ticks)
             print(f"[~] Tickers: {list(ticks.keys())}")
         except Exception as e:
@@ -3225,20 +2710,66 @@ app = Flask(__name__, static_folder=str(FRONTEND_DIR), static_url_path="")
 
 @app.route("/api/news")
 def api_news():
+    if external_worker_mode():
+        runtime_payload = runtime_news_payload_from_db()
+        if runtime_payload:
+            articles = runtime_payload.get("articles") if isinstance(runtime_payload.get("articles"), list) else []
+            for article in articles:
+                hydrate_article_from_ai_cache(article)
+            payload = {
+                "articles": articles,
+                "updated": runtime_payload.get("updated") or "",
+                "feedStatus": runtime_payload.get("feedStatus") if isinstance(runtime_payload.get("feedStatus"), dict) else {},
+                "refreshInterval": _news_refresh_seconds,
+                "allowedRefreshWindows": ALLOWED_REFRESH_WINDOWS,
+                "marketStatus": get_market_status(),
+                "aiSummaryProgress": runtime_payload.get("aiSummaryProgress") or ai_summary_progress_for_articles(articles),
+            }
+            return jsonify(payload)
     with _lock:
+        articles = list(_arts)
         payload = {
-            "articles": list(_arts),
+            "articles": articles,
             "updated": _updated,
             "feedStatus": dict(_feed_status),
             "refreshInterval": _news_refresh_seconds,
             "allowedRefreshWindows": ALLOWED_REFRESH_WINDOWS,
         }
     payload["marketStatus"] = get_market_status()
+    payload["aiSummaryProgress"] = ai_summary_progress_for_articles(articles)
     return jsonify(payload)
+
+
+@app.route("/api/news/ai-summaries")
+def api_news_ai_summaries():
+    if external_worker_mode():
+        runtime_payload = runtime_news_payload_from_db() or {}
+        articles = runtime_payload.get("articles") if isinstance(runtime_payload.get("articles"), list) else []
+        for article in articles:
+            hydrate_article_from_ai_cache(article)
+        updates = [ai_summary_update_payload(article) for article in articles if article_has_ai_summary(article)]
+        return jsonify({
+            "updates": updates,
+            "progress": runtime_payload.get("aiSummaryProgress") or ai_summary_progress_for_articles(articles),
+            "updated": runtime_payload.get("updated") or "",
+        })
+    with _lock:
+        articles = list(_arts)
+        updated = _updated
+    updates = [ai_summary_update_payload(article) for article in articles if article_has_ai_summary(article)]
+    return jsonify({
+        "updates": updates,
+        "progress": ai_summary_progress_for_articles(articles),
+        "updated": updated,
+    })
 
 
 @app.route("/api/tickers")
 def api_tickers():
+    if external_worker_mode():
+        runtime_payload = runtime_snapshot_from_db(include_history=False)
+        if runtime_payload and isinstance(runtime_payload.get("ticks"), dict):
+            return jsonify(runtime_payload["ticks"])
     with _lock:
         return jsonify(_ticks)
 
@@ -3246,6 +2777,10 @@ def api_tickers():
 @app.route("/api/snapshot")
 def api_snapshot():
     include_history = request.args.get("history", "0") in {"1", "true", "yes"}
+    if external_worker_mode():
+        runtime_payload = runtime_snapshot_from_db(include_history=include_history)
+        if runtime_payload:
+            return jsonify(runtime_payload)
     return jsonify(market_data_snapshot(include_history=include_history))
 
 
@@ -3291,12 +2826,20 @@ def api_quotes():
 
 @app.route("/api/history")
 def api_history():
+    if external_worker_mode():
+        runtime_payload = runtime_snapshot_from_db(include_history=True)
+        if runtime_payload and isinstance(runtime_payload.get("history"), dict):
+            return jsonify(runtime_payload["history"])
     with _lock:
         return jsonify(_price_history)
 
 
 @app.route("/api/analytics")
 def api_analytics():
+    if external_worker_mode():
+        runtime_payload = runtime_snapshot_from_db(include_history=False)
+        if runtime_payload and isinstance(runtime_payload.get("analytics"), dict):
+            return jsonify(runtime_payload["analytics"])
     with _lock:
         payload = dict(_analytics_payload)
     return jsonify(payload)
@@ -3304,6 +2847,10 @@ def api_analytics():
 
 @app.route("/api/derivatives/overview")
 def api_derivatives_overview():
+    if external_worker_mode():
+        runtime_payload = runtime_snapshot_from_db(include_history=False)
+        if runtime_payload and isinstance(runtime_payload.get("derivatives"), dict):
+            return jsonify(runtime_payload["derivatives"])
     with _lock:
         payload = dict(_derivatives_payload)
     return jsonify(payload)
@@ -3375,6 +2922,7 @@ def api_upstox_callback():
         }
     )
     persist_upstox_oauth_state("")
+    _upstox_stream_wakeup.set()
     return redirect("/")
 
 
@@ -3383,6 +2931,8 @@ def api_upstox_disconnect():
     if os.environ.get("UPSTOX_ACCESS_TOKEN", "").strip():
         return jsonify({"error": "UPSTOX_ACCESS_TOKEN is set via environment variable; remove it from your server environment to disconnect."}), 400
     clear_upstox_token_record()
+    _clear_upstox_stream_cache()
+    _upstox_stream_wakeup.set()
     return jsonify({"status": "ok", "connected": False})
 
 
@@ -3441,6 +2991,25 @@ def api_health():
 
 @app.route("/api/tickers/stream")
 def api_tickers_stream():
+    if external_worker_mode():
+        def generate_from_runtime():
+            last_payload = ""
+            while True:
+                payload = runtime_snapshot_from_db(include_history=False) or market_data_snapshot(include_history=False)
+                encoded = json.dumps(payload, sort_keys=True)
+                if encoded != last_payload:
+                    yield "data:" + encoded + "\n\n"
+                    last_payload = encoded
+                else:
+                    yield ": keepalive\n\n"
+                time.sleep(ticker_refresh_interval())
+
+        return Response(
+            stream_with_context(generate_from_runtime()),
+            mimetype="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+
     q: queue.Queue[str] = queue.Queue(maxsize=20)
     with _sse_lock:
         _sse_queues.append(q)
@@ -3479,6 +3048,7 @@ initialize_runtime_state()
 start_background_workers()
 
 if __name__ == "__main__":
+    host = os.environ.get("HOST", "127.0.0.1").strip() or "127.0.0.1"
     port = int(os.environ.get("PORT", "9090"))
 
     print("=" * 60)
@@ -3492,4 +3062,4 @@ if __name__ == "__main__":
     print("  Ctrl+C to stop")
     print("=" * 60)
     # Do not auto-open a browser here; macOS may block it with Permission denied.
-    app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False, threaded=True)
+    app.run(host=host, port=port, debug=False, use_reloader=False, threaded=True)

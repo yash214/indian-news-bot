@@ -4,6 +4,7 @@ import unittest
 from unittest import mock
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
+import struct
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -14,6 +15,37 @@ spec = importlib.util.spec_from_file_location("market_desk_app", APP_PATH)
 app = importlib.util.module_from_spec(spec)
 assert spec.loader is not None
 spec.loader.exec_module(app)
+
+from backend.news.url_resolver import resolve_google_news_url
+
+
+def pb_varint(value: int) -> bytes:
+    out = bytearray()
+    number = int(value)
+    while True:
+        to_write = number & 0x7F
+        number >>= 7
+        if number:
+            out.append(to_write | 0x80)
+        else:
+            out.append(to_write)
+            return bytes(out)
+
+
+def pb_key(field_number: int, wire_type: int) -> bytes:
+    return pb_varint((field_number << 3) | wire_type)
+
+
+def pb_len(field_number: int, payload: bytes) -> bytes:
+    return pb_key(field_number, 2) + pb_varint(len(payload)) + payload
+
+
+def pb_double(field_number: int, value: float) -> bytes:
+    return pb_key(field_number, 1) + struct.pack("<d", value)
+
+
+def pb_int(field_number: int, value: int) -> bytes:
+    return pb_key(field_number, 0) + pb_varint(value)
 
 
 class MarketStatusTests(unittest.TestCase):
@@ -91,8 +123,188 @@ class NewsScoringTests(unittest.TestCase):
 
         self.assertGreaterEqual(score, 8)
 
+    def test_article_preview_builds_cleaner_multi_sentence_summary(self):
+        preview = app.build_article_preview(
+            "Reliance raises capex for telecom expansion",
+            (
+                "Reliance raises capex for telecom expansion. "
+                "The company plans to accelerate network rollout across key circles. "
+                "Management said the spending will support subscriber growth and data usage. "
+                "Brokerages expect the move to pressure near-term cash flow but improve long-term positioning. "
+                "Analysts will watch execution timelines and tariff support."
+            ),
+            "Reuters",
+        )
+
+        self.assertNotIn("Reliance raises capex for telecom expansion. Reliance raises capex", preview)
+        self.assertIn("accelerate network rollout", preview)
+        self.assertLessEqual(len(preview), 680)
+
+    def test_summary_enrichment_detects_headline_like_snippets(self):
+        self.assertTrue(
+            app.summary_needs_ai(
+                "TARIL shares jump 10% on order win",
+                "TARIL shares jump 10% on order win Business Standard",
+            )
+        )
+
+    def test_ai_summary_prompt_includes_trading_context(self):
+        prompt = app.build_news_summary_prompt(
+            {
+                "title": "TARIL shares jump 10% on order win",
+                "summary": "The company received a large project order and traders are watching for follow-through.",
+                "articleText": "Full article body says the company received a large transformer order and expects execution over the next two quarters.",
+                "articleTextSource": "article-page",
+                "source": "Business Standard",
+                "sector": "General",
+                "sentiment": {"label": "bullish"},
+                "impact": 4,
+            }
+        )
+
+        self.assertIn("Write one dense, useful plain-text market brief in 5-6 concise sentences", prompt)
+        self.assertIn("Business Standard", prompt)
+        self.assertIn("TARIL shares jump 10% on order win", prompt)
+        self.assertIn("article-page", prompt)
+        self.assertIn("large transformer order", prompt)
+
+    def test_ai_article_analysis_normalizer_sanitizes_market_tags(self):
+        normalized = app.normalize_article_analysis(
+            {
+                "summary": "The company won a large order that may support revenue visibility. Traders should still watch execution timelines and broader index participation before assuming follow-through.",
+                "sentiment": "BULLISH",
+                "impactScore": 7.7,
+                "confidence": 0.82,
+                "sector": "Infra",
+                "indexImpact": {
+                    "nifty": "neutral",
+                    "bankNifty": "limited",
+                    "sectorIndex": "bullish",
+                    "timeframe": "intraday",
+                },
+                "reasons": ["Order win improves visibility", "Sector read-through is stronger than index impact"],
+            },
+            fallback_article={"sector": "General", "impact": 3, "sentiment": {"label": "neutral"}},
+        )
+
+        self.assertEqual(normalized["sentiment"], "bullish")
+        self.assertEqual(normalized["impactScore"], 8)
+        self.assertEqual(normalized["confidence"], 0.82)
+        self.assertEqual(normalized["sector"], "Infra")
+        self.assertEqual(normalized["indexImpact"]["sectorIndex"], "bullish")
+
+    def test_extract_article_text_reads_accessible_page_body(self):
+        html = """
+        <html><head><title>Story</title></head><body>
+        <nav>Subscribe to our newsletter</nav>
+        <article>
+          <h1>TARIL shares jump 10% on order win</h1>
+          <p>TARIL shares rallied after the company announced a major transformer order worth Rs 150 crore from a domestic customer.</p>
+          <p>The order is expected to support revenue visibility over the next two quarters, according to the company statement.</p>
+          <p>Traders are watching whether volume sustains after the initial gap-up move and whether management gives more detail on margins.</p>
+        </article>
+        </body></html>
+        """
+        text = app.extract_article_text(html, title="TARIL shares jump 10% on order win", max_chars=1000)
+        self.assertIn("Rs 150 crore", text)
+        self.assertIn("revenue visibility", text)
+        self.assertNotIn("Subscribe to our newsletter", text)
+
+    def test_article_text_usefulness_requires_more_than_feed_snippet(self):
+        feed = "Short market update."
+        article_text = " ".join(["Detailed article sentence about markets and earnings."] * 25)
+        self.assertTrue(app.article_text_is_useful(article_text, feed_text=feed, min_chars=300))
+        self.assertFalse(app.article_text_is_useful("Too short.", feed_text=feed, min_chars=300))
+
+    def test_article_extraction_skips_google_news_wrappers(self):
+        self.assertFalse(
+            app.article_link_supports_direct_extraction(
+                "https://news.google.com/rss/articles/example?oc=5"
+            )
+        )
+        self.assertTrue(
+            app.article_link_supports_direct_extraction(
+                "https://www.livemint.com/market/stock-market-news/example.html"
+            )
+        )
+
+    def test_google_news_resolver_decodes_publisher_url(self):
+        publisher_url = "https://publisher.example.com/markets/story.html"
+        batch_payload = (
+            ")]}'\n\n"
+            + app.json.dumps(
+                [
+                    [
+                        "wrb.fr",
+                        "Fbv4je",
+                        app.json.dumps(["garturlres", publisher_url, 1, publisher_url + "/amp/"]),
+                        None,
+                        None,
+                        None,
+                        "generic",
+                    ]
+                ]
+            )
+        )
+
+        class FakeResponse:
+            def __init__(self, text):
+                self.text = text
+
+            def raise_for_status(self):
+                return None
+
+        class FakeSession:
+            def __init__(self):
+                self.post_payload = None
+
+            def get(self, url, **kwargs):
+                return FakeResponse('<div data-n-a-id="abc123" data-n-a-ts="1777400764" data-n-a-sg="sig"></div>')
+
+            def post(self, url, **kwargs):
+                self.post_payload = kwargs.get("data") or {}
+                return FakeResponse(batch_payload)
+
+        session = FakeSession()
+        resolved = resolve_google_news_url("https://news.google.com/rss/articles/abc123?oc=5", session)
+
+        self.assertEqual(resolved, publisher_url)
+        self.assertIn("garturlreq", session.post_payload["f.req"])
+
+    def test_ai_summary_normalizer_limits_to_five_sentences(self):
+        normalized = app.normalize_ai_summary("Line 1\nLine 2\nLine 3\nLine 4\nLine 5")
+        self.assertEqual(normalized, "Line 1 Line 2 Line 3 Line 4 Line 5")
+
+    def test_ai_summary_normalizer_keeps_brief_paragraph(self):
+        normalized = app.normalize_ai_summary(
+            "Line 1. Line 2. Line 3. Line 4. Line 5. Line 6."
+        )
+        self.assertEqual(normalized, "Line 1. Line 2. Line 3. Line 4. Line 5. Line 6.")
+
+    def test_extract_ollama_response_text_reads_response_field(self):
+        text = app.extract_ollama_response_text({"response": "Four line summary"})
+        self.assertEqual(text, "Four line summary")
+
 
 class UpstoxProviderTests(unittest.TestCase):
+    def test_decode_feed_response_parses_live_feed_ltpc_message(self):
+        ltpc_payload = (
+            pb_double(1, 1500.5)
+            + pb_int(2, 1_745_729_552_723)
+            + pb_int(3, 25)
+            + pb_double(4, 1490.0)
+        )
+        feed_payload = pb_len(1, ltpc_payload) + pb_int(4, 0)
+        feed_entry = pb_len(1, b"NSE_EQ|INE009A01021") + pb_len(2, feed_payload)
+        response_payload = pb_int(1, 1) + pb_len(2, feed_entry) + pb_int(3, 1_745_729_566_039)
+
+        decoded = app.decode_feed_response(response_payload)
+
+        self.assertEqual(decoded["type"], "live_feed")
+        self.assertEqual(decoded["currentTs"], 1_745_729_566_039)
+        self.assertEqual(decoded["feeds"]["NSE_EQ|INE009A01021"]["ltpc"]["ltp"], 1500.5)
+        self.assertEqual(decoded["feeds"]["NSE_EQ|INE009A01021"]["ltpc"]["cp"], 1490.0)
+
     def test_upstox_access_token_uses_db_fallback(self):
         with mock.patch.dict(app.os.environ, {"UPSTOX_ACCESS_TOKEN": ""}, clear=False):
             with mock.patch.object(app, "stored_upstox_token_record", return_value={"access_token": "db-token"}):
@@ -158,6 +370,73 @@ class UpstoxProviderTests(unittest.TestCase):
         self.assertEqual(quote["instrumentKey"], "NSE_EQ|INE009A01021")
         session.get.assert_called_once()
 
+    def test_fetch_upstox_quotes_prefers_stream_cache_before_rest(self):
+        key = "NSE_EQ|INE009A01021"
+        app._upstox_stream_quote_cache.clear()
+        app._upstox_stream_quote_cache[key] = ({
+            "symbol": "INFY",
+            "name": "Infosys",
+            "price": 1501.0,
+            "previous_close": 1490.0,
+            "change": 11.0,
+            "pct": 0.74,
+            "day_high": 1504.0,
+            "day_low": 1488.0,
+            "open": 1492.0,
+            "volume": 1000.0,
+            "oi": 0.0,
+            "bid": 1500.5,
+            "ask": 1501.5,
+            "fetchedAt": app.time.time(),
+            "receivedAt": app.time.time(),
+            "source": "Upstox V3",
+            "instrumentKey": key,
+        }, app.time.time())
+        session = mock.Mock()
+        with mock.patch.dict(app.os.environ, {"MARKET_DATA_PROVIDER": "upstox", "UPSTOX_ACCESS_TOKEN": "token"}, clear=False):
+            with mock.patch.object(app, "http_session", return_value=session):
+                quote_map = app.fetch_upstox_quotes_by_label({"INFY": key})
+
+        self.assertEqual(quote_map["INFY"]["source"], "Upstox V3")
+        session.get.assert_not_called()
+
+    def test_refresh_quote_cache_for_symbols_keeps_nse_fallback_for_missing_upstox_quotes(self):
+        upstox_quotes = {
+            "INFY": {
+                "symbol": "INFY",
+                "name": "Infosys",
+                "price": 1500.0,
+                "change": 10.0,
+                "pct": 0.67,
+                "fetchedAt": app.time.time(),
+                "source": "Upstox",
+            },
+        }
+        nse_tcs = {
+            "symbol": "TCS",
+            "name": "TCS",
+            "price": 4100.0,
+            "previous_close": 4080.0,
+            "change": 20.0,
+            "pct": 0.49,
+            "day_high": 4110.0,
+            "day_low": 4068.0,
+            "open": 4085.0,
+            "volume": 200.0,
+            "oi": 0.0,
+            "bid": None,
+            "ask": None,
+            "fetchedAt": app.time.time(),
+            "source": "NSE",
+        }
+        with mock.patch.dict(app.os.environ, {"MARKET_DATA_PROVIDER": "upstox", "UPSTOX_ACCESS_TOKEN": "token"}, clear=False):
+            with mock.patch.object(app, "fetch_upstox_quotes_by_label", return_value=upstox_quotes):
+                with mock.patch.object(app, "_fetch_nse_quote", side_effect=lambda sym: nse_tcs if sym == "TCS" else None):
+                    quotes = app.refresh_quote_cache_for_symbols(["INFY", "TCS"])
+
+        self.assertEqual(quotes["INFY"]["source"], "Upstox")
+        self.assertEqual(quotes["TCS"]["source"], "NSE")
+
     def test_option_chain_summary_extracts_oi_and_flow(self):
         payload = app.summarize_upstox_option_chain(
             [
@@ -211,15 +490,17 @@ class UpstoxProviderTests(unittest.TestCase):
     def test_start_background_workers_is_idempotent(self):
         refresh_thread = mock.Mock()
         ticker_thread = mock.Mock()
+        stream_thread = mock.Mock()
         with mock.patch.object(app, "background_threads_enabled", return_value=True):
             with mock.patch.object(app, "_background_threads_started", False):
-                with mock.patch.object(app.threading, "Thread", side_effect=[refresh_thread, ticker_thread]) as thread_ctor:
+                with mock.patch.object(app.threading, "Thread", side_effect=[refresh_thread, ticker_thread, stream_thread]) as thread_ctor:
                     self.assertTrue(app.start_background_workers())
                     self.assertFalse(app.start_background_workers())
 
-        self.assertEqual(thread_ctor.call_count, 2)
+        self.assertEqual(thread_ctor.call_count, 3)
         refresh_thread.start.assert_called_once()
         ticker_thread.start.assert_called_once()
+        stream_thread.start.assert_called_once()
 
 
 class PersistenceTests(unittest.TestCase):
@@ -260,6 +541,84 @@ class PersistenceTests(unittest.TestCase):
             "INFY": {"qty": 2.0, "buyPrice": 1500.0},
             "BADSYMBOL": {"qty": 1.0, "buyPrice": 100.0},
         })
+
+    def test_ai_news_summary_round_trip_with_sqlite(self):
+        article = {
+            "id": "abc123",
+            "title": "Nifty gains as IT stocks rally",
+            "link": "https://example.com/article",
+            "source": "Example",
+            "published": "27 Apr 12:00",
+            "summary": "Feed summary",
+            "sourceSummary": "Feed summary",
+        }
+        cache_key = app.ai_summary_cache_key(article)
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            db_path = Path(tmp_dir) / "state.db"
+            app.persist_ai_news_summary(cache_key, article, "AI generated summary.", db_path)
+            self.assertEqual(app.load_persisted_ai_news_summary(cache_key, db_path), "AI generated summary.")
+
+    def test_ai_news_analysis_round_trip_with_sqlite(self):
+        article = {
+            "id": "abc123",
+            "title": "Nifty gains as IT stocks rally",
+            "link": "https://example.com/article",
+            "source": "Example",
+            "published": "27 Apr 12:00",
+            "summary": "Feed summary",
+            "sourceSummary": "Feed summary",
+        }
+        cache_key = app.ai_analysis_cache_key(article)
+        analysis = {
+            "summary": "IT stocks helped the market tone improve.",
+            "sentiment": "bullish",
+            "impactScore": 6,
+            "confidence": 0.7,
+            "sector": "IT",
+            "indexImpact": {"nifty": "bullish", "bankNifty": "limited", "sectorIndex": "bullish", "timeframe": "intraday"},
+            "reasons": ["IT leadership supported Nifty"],
+        }
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            db_path = Path(tmp_dir) / "state.db"
+            app.persist_ai_news_analysis(cache_key, article, analysis, db_path)
+            self.assertEqual(app.load_persisted_ai_news_analysis(cache_key, db_path), analysis)
+
+    def test_ai_summary_updates_endpoint_returns_only_ai_summaries(self):
+        old_articles = list(app._arts)
+        old_updated = app._updated
+        now = app.time.time()
+        with app._lock:
+            app._arts = [
+                {
+                    "id": "ai-1",
+                    "summary": "AI generated summary.",
+                    "summarySource": "ai",
+                    "ts": now,
+                },
+                {
+                    "id": "plain-1",
+                    "summary": "Plain feed summary.",
+                    "ts": now,
+                },
+            ]
+            app._updated = "12:00:00"
+        try:
+            with app.app.test_client() as client:
+                response = client.get("/api/news/ai-summaries")
+        finally:
+            with app._lock:
+                app._arts = old_articles
+                app._updated = old_updated
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertEqual(len(payload["updates"]), 1)
+        self.assertEqual(payload["updates"][0]["id"], "ai-1")
+        self.assertEqual(payload["updates"][0]["summary"], "AI generated summary.")
+        self.assertEqual(payload["updates"][0]["summarySource"], "ai")
+        self.assertIn("impactMeta", payload["updates"][0])
+        self.assertEqual(payload["progress"]["total"], 2)
+        self.assertEqual(payload["progress"]["complete"], 1)
 
 
 class MarketSnapshotTests(unittest.TestCase):

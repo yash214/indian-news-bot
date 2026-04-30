@@ -1,6 +1,6 @@
 [Unit]
-Description=India Market Desk Gunicorn Service
-After=network-online.target
+Description=India Market Desk Background Worker
+After=network-online.target market-desk.service
 Wants=network-online.target
 
 [Service]
@@ -10,11 +10,11 @@ Group=ubuntu
 WorkingDirectory=/srv/indian-news-bot/indian-market-news-bot
 EnvironmentFile=/srv/indian-news-bot/indian-market-news-bot/deploy/lightsail/market-desk.env
 Environment=PYTHONUNBUFFERED=1
-ExecStart=/srv/indian-news-bot/indian-market-news-bot/.venv/bin/gunicorn backend.app:app --bind 127.0.0.1:8000 --workers 1 --threads 8 --timeout 120
+ExecStart=/srv/indian-news-bot/indian-market-news-bot/.venv/bin/python -m backend.worker
 Restart=always
 RestartSec=5
 TimeoutStopSec=30
-SyslogIdentifier=market-desk
+SyslogIdentifier=market-desk-worker
 NoNewPrivileges=true
 
 [Install]
