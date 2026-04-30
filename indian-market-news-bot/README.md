@@ -28,33 +28,25 @@ The backend serves the frontend automatically from `frontend/`.
 
 ## Upstox Integration
 
-The app supports two Upstox modes:
+The app uses the Upstox Analytics Token only. This is a long-lived, read-only token for market-data APIs such as full quotes, Market Data Feed V3, option chain, option contracts, greeks, and instrument search.
 
-- `UPSTOX_ACCESS_TOKEN`: quick manual token for local testing
-- OAuth callback flow: better for production hosting
-
-Quick local run with a manual token:
+Quick local run:
 
 ```bash
-MARKET_DATA_PROVIDER=upstox UPSTOX_ACCESS_TOKEN=your_token python backend/app.py
+MARKET_DATA_PROVIDER=upstox UPSTOX_ANALYTICS_TOKEN=your_token UPSTOX_HTTP_TRANSPORT=curl python backend/app.py
 ```
 
 Useful Upstox settings:
 
 - `MARKET_DATA_PROVIDER=upstox` prefers Upstox quotes and option-chain APIs
+- `UPSTOX_HTTP_TRANSPORT=curl` uses the system curl transport when Upstox's edge blocks Python requests
 - `UPSTOX_FALLBACK_TO_NSE=1` keeps NSE fallback enabled if Upstox is unavailable for a symbol
 - `UPSTOX_INSTRUMENT_KEYS='{"SBIN":"NSE_EQ|INE062A01020"}'` overrides or extends symbol mappings
 - `UPSTOX_OPTION_EXPIRY=YYYY-MM-DD` sets a default expiry for `/api/derivatives/option-chain`
-- `UPSTOX_CLIENT_ID`, `UPSTOX_CLIENT_SECRET`, `UPSTOX_REDIRECT_URI` enable OAuth login
-- `UPSTOX_PRIMARY_IP`, `UPSTOX_SECONDARY_IP` store the static IPs to sync with Upstox
 
 Production-friendly Upstox endpoints:
 
 - `GET /api/integrations/upstox/status`
-- `GET /api/auth/upstox/login`
-- `GET /api/auth/upstox/callback`
-- `POST /api/auth/upstox/disconnect`
-- `POST /api/auth/upstox/static-ips/sync`
 
 ## Lightsail Deployment
 
@@ -64,7 +56,7 @@ The repo now includes a Lightsail-oriented deployment path built around:
 - optional split-process mode with `gunicorn` for web routes and `backend.worker` for background loops
 - `systemd` for service supervision
 - `nginx` as the reverse proxy in front of the local `gunicorn` port
-- a Lightsail static public IP used directly for Upstox IP registration
+- Upstox market data through `UPSTOX_ANALYTICS_TOKEN`, with NSE fallback intact
 
 Included files:
 
@@ -99,11 +91,9 @@ Important values:
 MARKET_DESK_DATA_DIR=/srv/indian-news-bot/indian-market-news-bot/backend/data
 MARKET_DESK_DISABLE_THREADS=1
 MARKET_DATA_PROVIDER=upstox
-UPSTOX_CLIENT_ID=<your_upstox_api_key>
-UPSTOX_CLIENT_SECRET=<your_upstox_api_secret>
-UPSTOX_REDIRECT_URI=https://<your-domain>/api/auth/upstox/callback
-UPSTOX_PRIMARY_IP=<your_lightsail_static_ip>
-UPSTOX_SECONDARY_IP=
+UPSTOX_ANALYTICS_TOKEN=<your_upstox_analytics_token>
+UPSTOX_HTTP_TRANSPORT=auto
+UPSTOX_USER_AGENT=curl/8.7.1
 
 AI_PROVIDER=bedrock
 BEDROCK_REGION=ap-south-1
@@ -128,18 +118,14 @@ sudo nginx -t
 sudo systemctl reload nginx
 ```
 
-8. Add TLS with Certbot so the Upstox callback URL is HTTPS.
-9. In Upstox, use the same callback URL and set:
-   `Primary IP = your Lightsail static IP`
-   `Secondary IP = blank for now or a second failover server later`
-10. Visit `https://<your-domain>/api/auth/upstox/login` to complete OAuth.
+8. Add TLS with Certbot so the dashboard is served over HTTPS.
+9. Generate an Analytics Token in the Upstox Developer Apps page and place it in `UPSTOX_ANALYTICS_TOKEN`.
 
 Notes:
 
 - With `MARKET_DESK_DISABLE_THREADS=1`, Gunicorn serves HTTP only and `market-desk-worker` owns polling, AI queueing, and live feed loops.
 - Runtime news/market snapshots are shared through SQLite so the web process can stay fast while the worker refreshes data.
-- Lightsail already gives you the fixed public IP you need, so no outbound proxy layer is required.
-- If you update static IPs in Upstox, existing tokens can be invalidated and you may need to complete OAuth again.
+- The Analytics Token is read-only, so this app does not use Upstox order APIs, OAuth callbacks, or static-IP sync.
 
 For the full production upgrade path for the existing `stockterminal.in` site, follow:
 

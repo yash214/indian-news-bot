@@ -25,15 +25,16 @@ import os
 import queue
 import re
 import secrets
+import subprocess
 import sys
 import threading
 import time
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, datetime, time as dt_time, timezone, timedelta
-from urllib.parse import urlencode
+from urllib.parse import quote
 
-from flask import Flask, Response, jsonify, redirect, request, stream_with_context
+from flask import Flask, Response, jsonify, request, stream_with_context
 
 try:
     from backend.core.settings import (
@@ -48,8 +49,6 @@ try:
         MARKET_CLOSE_TIME,
         MARKET_OPEN_TIME,
         STATE_DB_PATH,
-        UPSTOX_AUTH_STATE_KEY,
-        UPSTOX_AUTH_TOKEN_KEY,
         WATCHLIST_SYMBOL_LIMIT,
     )
     from backend.core.persistence import (
@@ -63,11 +62,9 @@ try:
         load_persisted_ai_news_summary,
         load_persisted_app_state,
         load_refresh_settings,
-        load_upstox_oauth_state,
         persist_ai_news_analysis,
         persist_ai_news_summary,
         persist_refresh_settings,
-        persist_upstox_oauth_state,
         sanitize_bookmarks,
         sanitize_portfolio,
         sanitize_state_patch,
@@ -177,8 +174,6 @@ except ModuleNotFoundError:
         MARKET_CLOSE_TIME,
         MARKET_OPEN_TIME,
         STATE_DB_PATH,
-        UPSTOX_AUTH_STATE_KEY,
-        UPSTOX_AUTH_TOKEN_KEY,
         WATCHLIST_SYMBOL_LIMIT,
     )
     from core.persistence import (
@@ -192,11 +187,9 @@ except ModuleNotFoundError:
         load_persisted_ai_news_summary,
         load_persisted_app_state,
         load_refresh_settings,
-        load_upstox_oauth_state,
         persist_ai_news_analysis,
         persist_ai_news_summary,
         persist_refresh_settings,
-        persist_upstox_oauth_state,
         sanitize_bookmarks,
         sanitize_portfolio,
         sanitize_state_patch,
@@ -416,6 +409,13 @@ _nse_quote_cache: dict[str, tuple[dict, float]] = {}
 _upstox_quote_cache: dict[str, tuple[dict, float]] = {}
 _ai_summary_service: NewsAiSummaryService | None = None
 _upstox_stream_quote_cache: dict[str, tuple[dict, float]] = {}
+_upstox_rest_status = {
+    "lastError": None,
+    "lastErrorAt": None,
+    "lastOkAt": None,
+    "failedKeys": [],
+}
+_upstox_curl_preferred_until = 0.0
 _chart_cache: dict[tuple[str, str, str], tuple[dict, float]] = {}
 _chart_cache_ttl = 1800.0
 _news_refresh_seconds = 300
@@ -486,24 +486,16 @@ def requested_market_data_provider() -> str:
     return provider if provider in {NSE_PROVIDER_NAME, UPSTOX_PROVIDER_NAME} else NSE_PROVIDER_NAME
 
 
-def stored_upstox_token_record(path: Path = STATE_DB_PATH) -> dict:
-    record = db_get_json(UPSTOX_AUTH_TOKEN_KEY, default={}, path=path)
-    return record if isinstance(record, dict) else {}
+def upstox_analytics_token() -> str:
+    return os.environ.get("UPSTOX_ANALYTICS_TOKEN", "").strip()
 
 
-def persist_upstox_token_record(record: dict, path: Path = STATE_DB_PATH) -> None:
-    db_set_json(UPSTOX_AUTH_TOKEN_KEY, record, path=path)
+def upstox_token_source() -> str:
+    return "analytics_env" if upstox_analytics_token() else "none"
 
 
-def clear_upstox_token_record(path: Path = STATE_DB_PATH) -> None:
-    db_set_json(UPSTOX_AUTH_TOKEN_KEY, {}, path=path)
-
-
-def upstox_access_token() -> str:
-    token = os.environ.get("UPSTOX_ACCESS_TOKEN", "").strip()
-    if token:
-        return token
-    return str(stored_upstox_token_record().get("access_token", "")).strip()
+def upstox_configured() -> bool:
+    return bool(upstox_analytics_token())
 
 
 def upstox_api_base() -> str:
@@ -518,25 +510,23 @@ def upstox_v3_api_base() -> str:
     return re.sub(r"/v2/?$", "/v3", base) if re.search(r"/v2/?$", base) else UPSTOX_DEFAULT_V3_API_BASE
 
 
-def upstox_client_id() -> str:
-    return os.environ.get("UPSTOX_CLIENT_ID", "").strip()
-
-
-def upstox_client_secret() -> str:
-    return os.environ.get("UPSTOX_CLIENT_SECRET", "").strip()
-
-
-def upstox_redirect_uri() -> str:
-    return os.environ.get("UPSTOX_REDIRECT_URI", "").strip()
-
-
-def upstox_auth_configured() -> bool:
-    return bool(upstox_client_id() and upstox_client_secret() and upstox_redirect_uri())
-
-
 def upstox_fallback_enabled() -> bool:
     raw = os.environ.get("UPSTOX_FALLBACK_TO_NSE", "1").strip().lower()
     return raw not in {"0", "false", "no", "off"}
+
+
+def upstox_debug_enabled() -> bool:
+    raw = os.environ.get("UPSTOX_DEBUG", "").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
+def upstox_http_transport() -> str:
+    transport = os.environ.get("UPSTOX_HTTP_TRANSPORT", "auto").strip().lower()
+    return transport if transport in {"auto", "requests", "curl"} else "auto"
+
+
+def upstox_user_agent() -> str:
+    return os.environ.get("UPSTOX_USER_AGENT", "curl/8.7.1").strip() or "curl/8.7.1"
 
 
 def upstox_stream_stale_after(status: dict | None = None) -> float:
@@ -548,49 +538,35 @@ def upstox_stream_stale_after(status: dict | None = None) -> float:
     )
 
 
-def upstox_oauth_dialog_url(state: str) -> str:
-    if not upstox_auth_configured():
-        raise RuntimeError("Upstox OAuth env vars are not configured")
-    return (
-        f"{upstox_api_base()}/login/authorization/dialog?"
-        + urlencode(
-            {
-                "response_type": "code",
-                "client_id": upstox_client_id(),
-                "redirect_uri": upstox_redirect_uri(),
-                "state": state,
-            }
-        )
-    )
-
-
 def market_data_provider_status() -> dict:
     requested = requested_market_data_provider()
-    configured = bool(upstox_access_token())
+    configured = upstox_configured()
     active = active_market_data_provider()
-    token_record = stored_upstox_token_record()
     stream = upstox_stream_runtime_status()
-    token_source = (
-        "env"
-        if os.environ.get("UPSTOX_ACCESS_TOKEN", "").strip()
-        else "db"
-        if token_record.get("access_token")
-        else "none"
-    )
+    rest = upstox_rest_runtime_status()
+    token_source = upstox_token_source()
+    degraded = requested == UPSTOX_PROVIDER_NAME and configured and bool(rest.get("lastError")) and not stream["connected"]
     return {
         "requested": requested,
         "active": active,
         "upstoxConfigured": configured,
-        "upstoxAuthConfigured": upstox_auth_configured(),
+        "upstoxAuthConfigured": configured,
         "upstoxTokenSource": token_source,
+        "upstoxTokenMode": "analytics" if configured else "none",
         "fallbackToNse": upstox_fallback_enabled(),
         "streamConnected": stream["connected"],
         "streamDependencyReady": stream["dependencyReady"],
+        "degraded": degraded,
+        "rest": rest,
         "reason": (
-            "Upstox access token missing; using NSE fallback"
+            "Upstox analytics token missing; using NSE fallback"
             if requested == UPSTOX_PROVIDER_NAME and not configured
             else "Upstox V3 live stream enabled"
             if active == UPSTOX_PROVIDER_NAME and stream["connected"]
+            else f"Upstox REST issue; NSE fallback active: {rest['lastError']}"
+            if degraded and upstox_fallback_enabled()
+            else f"Upstox REST issue: {rest['lastError']}"
+            if degraded
             else "Upstox REST quotes enabled"
             if active == UPSTOX_PROVIDER_NAME
             else "NSE public endpoints enabled"
@@ -599,7 +575,7 @@ def market_data_provider_status() -> dict:
 
 
 def active_market_data_provider() -> str:
-    if requested_market_data_provider() == UPSTOX_PROVIDER_NAME and upstox_access_token():
+    if requested_market_data_provider() == UPSTOX_PROVIDER_NAME and upstox_configured():
         return UPSTOX_PROVIDER_NAME
     return NSE_PROVIDER_NAME
 
@@ -636,6 +612,23 @@ def upstox_stream_runtime_status() -> dict:
     return status
 
 
+def upstox_rest_runtime_status() -> dict:
+    with _lock:
+        status = dict(_upstox_rest_status)
+    status["transport"] = upstox_http_transport()
+    status["curlPreferred"] = _prefer_upstox_curl()
+    if status.get("lastErrorAt"):
+        status["lastErrorAt"] = datetime.fromtimestamp(status["lastErrorAt"], IST).isoformat()
+    if status.get("lastOkAt"):
+        status["lastOkAt"] = datetime.fromtimestamp(status["lastOkAt"], IST).isoformat()
+    return status
+
+
+def _set_upstox_rest_status(**patch) -> None:
+    with _lock:
+        _upstox_rest_status.update(patch)
+
+
 def upstox_stream_dependencies_ready() -> bool:
     try:
         import websocket  # noqa: F401
@@ -645,16 +638,7 @@ def upstox_stream_dependencies_ready() -> bool:
 
 
 def upstox_stream_authorized_redirect_uri() -> str:
-    response = http_session().get(
-        stream_authorize_url(upstox_v3_api_base()),
-        headers={
-            "Accept": "application/json",
-            "Authorization": f"Bearer {upstox_access_token()}",
-        },
-        timeout=8,
-    )
-    response.raise_for_status()
-    payload = response.json()
+    payload = upstox_request_json(stream_authorize_url(upstox_v3_api_base()), timeout=8)
     uri = str((payload.get("data") or {}).get("authorized_redirect_uri") or "").strip()
     if not uri:
         raise RuntimeError("Upstox V3 authorize response did not include authorized_redirect_uri")
@@ -662,48 +646,33 @@ def upstox_stream_authorized_redirect_uri() -> str:
 
 
 def upstox_integration_status() -> dict:
-    token = upstox_access_token()
-    record = stored_upstox_token_record()
+    token = upstox_analytics_token()
     provider = market_data_provider_status()
-    login_path = "/api/auth/upstox/login" if upstox_auth_configured() else None
     return {
         "provider": provider,
-        "authConfigured": upstox_auth_configured(),
-        "redirectUri": upstox_redirect_uri() or None,
-        "loginPath": login_path,
+        "authConfigured": bool(token),
+        "credential": "UPSTOX_ANALYTICS_TOKEN",
         "connected": bool(token),
         "tokenPreview": upstox_token_preview(token) if token else None,
         "tokenSource": provider["upstoxTokenSource"],
-        "primaryIp": os.environ.get("UPSTOX_PRIMARY_IP", "").strip() or None,
-        "secondaryIp": os.environ.get("UPSTOX_SECONDARY_IP", "").strip() or None,
-        "staticIpConfigured": bool(os.environ.get("UPSTOX_PRIMARY_IP", "").strip()),
-        "staticIpSyncReady": bool(os.environ.get("UPSTOX_PRIMARY_IP", "").strip() and token),
-        "storedAt": record.get("issued_at") if isinstance(record, dict) else None,
+        "tokenMode": "analytics" if token else "none",
+        "readOnly": True,
+        "supportedApis": [
+            "Full market quotes",
+            "OHLC quotes V3",
+            "LTP quotes V3",
+            "Historical candle data V3",
+            "Market Data Feed V3",
+            "Market Data Feed Authorize V3",
+            "Market Status",
+            "Put/Call Option chain",
+            "Option contracts",
+            "Option Greeks",
+            "Instrument Search",
+        ],
         "stream": upstox_stream_runtime_status(),
         "dataDir": str(DATA_DIR),
     }
-
-
-def sync_upstox_static_ips(primary_ip: str | None = None, secondary_ip: str | None = None) -> dict:
-    primary = (primary_ip or os.environ.get("UPSTOX_PRIMARY_IP", "")).strip()
-    secondary = (secondary_ip or os.environ.get("UPSTOX_SECONDARY_IP", "")).strip()
-    if not primary:
-        raise RuntimeError("UPSTOX_PRIMARY_IP is not configured")
-    payload = {"primary_ip": primary}
-    if secondary:
-        payload["secondary_ip"] = secondary
-    response = http_session().put(
-        f"{upstox_api_base()}/user/ip",
-        headers=upstox_headers(),
-        json=payload,
-        timeout=12,
-    )
-    response.raise_for_status()
-    body = response.json()
-    data = body.get("data") or {}
-    if data.get("access_tokens_invalidated") and not os.environ.get("UPSTOX_ACCESS_TOKEN", "").strip():
-        clear_upstox_token_record()
-    return body
 
 
 def load_holiday_calendar(path: Path = HOLIDAY_CALENDAR_PATH) -> dict[str, dict[str, str]]:
@@ -949,7 +918,11 @@ def refresh_quote_cache_for_symbols(symbols: list[str]) -> dict[str, dict]:
             for sym in clean_symbols
             if (key := upstox_instrument_key_for_symbol(sym))
         }
-        quotes = fetch_upstox_quotes_by_label(label_to_key) if label_to_key else {}
+        try:
+            quotes = fetch_upstox_quotes_by_label(label_to_key) if label_to_key else {}
+        except Exception as exc:
+            print(f"[!] Upstox quotes failed; falling back to NSE: {exc}")
+            quotes = {}
         if not upstox_fallback_enabled():
             return quotes
         pending_symbols = [sym for sym in clean_symbols if sym not in quotes]
@@ -1392,40 +1365,202 @@ def upstox_stream_subscription_map(state: dict | None = None) -> dict[str, str]:
 
 
 def upstox_headers() -> dict[str, str]:
-    token = upstox_access_token()
+    token = upstox_analytics_token()
     if not token:
-        raise RuntimeError("UPSTOX_ACCESS_TOKEN is not configured")
+        raise RuntimeError("UPSTOX_ANALYTICS_TOKEN is not configured")
     return {
         "Accept": "application/json",
-        "Content-Type": "application/json",
         "Authorization": f"Bearer {token}",
+        "User-Agent": upstox_user_agent(),
     }
 
 
-def upstox_auth_token_request(code: str) -> dict:
-    if not upstox_auth_configured():
-        raise RuntimeError("Upstox OAuth env vars are not configured")
-    response = http_session().post(
-        f"{upstox_api_base()}/login/authorization/token",
-        headers={
-            "Accept": "application/json",
-            "Content-Type": "application/x-www-form-urlencoded",
-        },
-        data={
-            "code": code,
-            "client_id": upstox_client_id(),
-            "client_secret": upstox_client_secret(),
-            "redirect_uri": upstox_redirect_uri(),
-            "grant_type": "authorization_code",
-        },
-        timeout=12,
+def upstox_response_error(response) -> str:
+    status_code = getattr(response, "status_code", None)
+    prefix = f"HTTP {status_code}" if status_code else "Upstox request failed"
+    try:
+        payload = response.json()
+    except Exception:
+        text = str(getattr(response, "text", "") or "").strip()
+        return f"{prefix}: {text[:240] or 'no response body'}"
+
+    errors = payload.get("errors") if isinstance(payload, dict) else None
+    if isinstance(errors, list) and errors:
+        first = errors[0] or {}
+        code = first.get("errorCode") or first.get("error_code") or first.get("code")
+        message = first.get("message") or first.get("errorMessage") or first.get("error")
+        detail = " ".join(str(part) for part in (code, message) if part)
+        return f"{prefix}: {detail or str(first)[:240]}"
+    if isinstance(payload, dict):
+        message = payload.get("message") or payload.get("error") or payload.get("status")
+        if message:
+            return f"{prefix}: {message}"
+    return f"{prefix}: {str(payload)[:240]}"
+
+
+class UpstoxEdgeBlockedError(RuntimeError):
+    """Raised when Upstox's edge returns HTML instead of API JSON."""
+
+
+def upstox_response_is_html_block(response) -> bool:
+    status_code = _upstox_http_status_code(response)
+    if status_code != 403:
+        return False
+    headers = getattr(response, "headers", {}) or {}
+    content_type = str(headers.get("content-type") or headers.get("Content-Type") or "").lower()
+    text = str(getattr(response, "text", "") or "")[:600].lower()
+    return "text/html" in content_type or "<!doctype html" in text or "<html" in text or "cloudflare" in text
+
+
+def _upstox_http_status_code(response) -> int:
+    try:
+        return int(getattr(response, "status_code", 200) or 200)
+    except Exception:
+        return 200
+
+
+def _prefer_upstox_curl() -> bool:
+    transport = upstox_http_transport()
+    if transport == "curl":
+        return True
+    if transport == "requests":
+        return False
+    return time.time() < _upstox_curl_preferred_until
+
+
+def _mark_upstox_curl_preferred(seconds: float = 900.0) -> None:
+    global _upstox_curl_preferred_until
+    _upstox_curl_preferred_until = max(_upstox_curl_preferred_until, time.time() + seconds)
+
+
+def _upstox_request_json_with_requests(url: str, timeout: int) -> dict:
+    response = http_session().get(
+        url,
+        headers=upstox_headers(),
+        timeout=timeout,
     )
-    response.raise_for_status()
-    payload = response.json()
-    token = str(payload.get("access_token") or payload.get("data", {}).get("access_token") or "").strip()
-    if not token:
-        raise RuntimeError("Upstox token exchange did not return an access token")
-    return payload
+    status_code = _upstox_http_status_code(response)
+    if status_code >= 400:
+        error = upstox_response_error(response)
+        if upstox_response_is_html_block(response):
+            raise UpstoxEdgeBlockedError(error)
+        raise RuntimeError(error)
+    return response.json()
+
+
+def _curl_config_value(value: str) -> str:
+    return str(value).replace("\\", "\\\\").replace('"', '\\"')
+
+
+def _upstox_request_json_with_curl(url: str, timeout: int) -> dict:
+    marker = "__MARKET_DESK_HTTP_STATUS__"
+    config_lines = [
+        f'url = "{_curl_config_value(url)}"',
+        'request = "GET"',
+        f"max-time = {timeout}",
+        "silent",
+        "show-error",
+        "compressed",
+        f'write-out = "{marker}%{{http_code}}"',
+    ]
+    for name, value in upstox_headers().items():
+        config_lines.append(f'header = "{_curl_config_value(f"{name}: {value}")}"')
+
+    try:
+        completed = subprocess.run(
+            ["curl", "--config", "-"],
+            input="\n".join(config_lines) + "\n",
+            capture_output=True,
+            text=True,
+            timeout=timeout + 3,
+        )
+    except FileNotFoundError as exc:
+        raise RuntimeError("curl transport requested, but curl is not installed") from exc
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(f"Upstox curl request timed out after {timeout}s") from exc
+
+    stdout = completed.stdout or ""
+    stderr = (completed.stderr or "").strip()
+    if marker not in stdout:
+        detail = stderr or stdout[:240] or f"curl exited with {completed.returncode}"
+        raise RuntimeError(f"Upstox curl request failed: {detail}")
+    body, status_text = stdout.rsplit(marker, 1)
+    try:
+        status_code = int(status_text.strip()[-3:])
+    except ValueError as exc:
+        raise RuntimeError(f"Upstox curl request returned an unreadable status: {status_text[:80]}") from exc
+    if completed.returncode != 0 and not body:
+        raise RuntimeError(f"Upstox curl request failed: {stderr or completed.returncode}")
+    if status_code >= 400:
+        raise RuntimeError(f"HTTP {status_code}: {body.strip()[:240] or stderr or 'no response body'}")
+    try:
+        return json.loads(body)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"Upstox curl response was not JSON: {body.strip()[:240]}") from exc
+
+
+def upstox_request_json(url: str, timeout: int = 8) -> dict:
+    transport = upstox_http_transport()
+    if _prefer_upstox_curl():
+        if upstox_debug_enabled():
+            print("[*] Upstox transport: curl")
+        return _upstox_request_json_with_curl(url, timeout)
+    try:
+        if upstox_debug_enabled():
+            print("[*] Upstox transport: requests")
+        return _upstox_request_json_with_requests(url, timeout)
+    except UpstoxEdgeBlockedError as exc:
+        if transport != "auto":
+            raise
+        _mark_upstox_curl_preferred()
+        if upstox_debug_enabled():
+            print("[*] Upstox requests transport got HTML 403; switching to curl transport")
+        return _upstox_request_json_with_curl(url, timeout)
+
+
+def _parse_upstox_quote_payload(label_to_key: dict[str, str], payload: dict, received_at: float) -> dict[str, dict]:
+    key_to_label = {key: label for label, key in label_to_key.items()}
+    out: dict[str, dict] = {}
+    for quote_payload in (payload.get("data") or {}).values():
+        instrument_key = quote_payload.get("instrument_token") or quote_payload.get("instrument_key")
+        label = key_to_label.get(instrument_key)
+        if not label:
+            symbol = re.sub(r"[^A-Z0-9&.-]", "", str(quote_payload.get("symbol", "")).upper())
+            label = symbol if symbol in label_to_key else None
+        if not label:
+            continue
+        quote = upstox_quote_from_payload(label, quote_payload, received_at)
+        if not quote:
+            continue
+        cache_key = f"{label}|{label_to_key[label]}"
+        _upstox_quote_cache[cache_key] = (quote, received_at)
+        out[label] = quote
+    return out
+
+
+def upstox_quotes_url(instrument_keys: list[str]) -> str:
+    # Upstox documents comma as the raw separator. quote_plus would turn spaces
+    # into "+", so use quote to produce "%20" and keep commas unescaped.
+    encoded_keys = quote(",".join(instrument_keys), safe=",")
+    return f"{upstox_api_base()}/market-quote/quotes?instrument_key={encoded_keys}"
+
+
+def upstox_option_chain_url(underlying_key: str, expiry_date: str) -> str:
+    return (
+        f"{upstox_api_base()}/option/chain"
+        f"?instrument_key={quote(underlying_key, safe='')}"
+        f"&expiry_date={quote(expiry_date, safe='')}"
+    )
+
+
+def fetch_upstox_quote_batch(label_to_key: dict[str, str], received_at: float) -> dict[str, dict]:
+    url = upstox_quotes_url(list(label_to_key.values()))
+    if upstox_debug_enabled():
+        print(f"[*] Upstox quotes URL: {url}")
+    payload = upstox_request_json(url, timeout=8)
+    if payload.get("status") not in {None, "success"}:
+        raise RuntimeError(f"Upstox quote request failed: {payload.get('status')}")
+    return _parse_upstox_quote_payload(label_to_key, payload, received_at)
 
 
 def fetch_upstox_stream_quotes_by_label(label_to_key: dict[str, str]) -> dict[str, dict]:
@@ -1450,7 +1585,7 @@ def fetch_upstox_stream_quotes_by_label(label_to_key: dict[str, str]) -> dict[st
 
 
 def fetch_upstox_quotes_by_label(label_to_key: dict[str, str]) -> dict[str, dict]:
-    if not label_to_key or not upstox_access_token():
+    if not label_to_key or not upstox_configured():
         return {}
 
     now = time.time()
@@ -1469,33 +1604,35 @@ def fetch_upstox_quotes_by_label(label_to_key: dict[str, str]) -> dict[str, dict
 
     while pending:
         labels = list(pending.keys())[:UPSTOX_QUOTE_BATCH_LIMIT]
-        keys = [pending[label] for label in labels]
-        key_to_label = {pending[label]: label for label in labels}
-        response = http_session().get(
-            f"{upstox_api_base()}/market-quote/quotes",
-            params={"instrument_key": ",".join(keys)},
-            headers=upstox_headers(),
-            timeout=8,
-        )
-        response.raise_for_status()
-        payload = response.json()
-        if payload.get("status") not in {None, "success"}:
-            raise RuntimeError(f"Upstox quote request failed: {payload.get('status')}")
-
-        for quote_payload in (payload.get("data") or {}).values():
-            instrument_key = quote_payload.get("instrument_token") or quote_payload.get("instrument_key")
-            label = key_to_label.get(instrument_key)
-            if not label:
-                symbol = re.sub(r"[^A-Z0-9&.-]", "", str(quote_payload.get("symbol", "")).upper())
-                label = symbol if symbol in pending else None
-            if not label:
-                continue
-            quote = upstox_quote_from_payload(label, quote_payload, now)
-            if not quote:
-                continue
-            cache_key = f"{label}|{pending[label]}"
-            _upstox_quote_cache[cache_key] = (quote, now)
-            out[label] = quote
+        batch = {label: pending[label] for label in labels}
+        try:
+            out.update(fetch_upstox_quote_batch(batch, now))
+            _set_upstox_rest_status(lastError=None, lastOkAt=time.time(), failedKeys=[])
+        except Exception as exc:
+            batch_error = str(exc)
+            if len(batch) == 1:
+                label, key = next(iter(batch.items()))
+                _set_upstox_rest_status(lastError=batch_error[:240], lastErrorAt=time.time(), failedKeys=[key])
+                print(f"[!] Upstox {label} ({key}): {batch_error}")
+            else:
+                print(f"[!] Upstox quote batch rejected; retrying individually: {batch_error}")
+                failed_keys: list[str] = []
+                successful = False
+                for label, key in batch.items():
+                    try:
+                        single = fetch_upstox_quote_batch({label: key}, now)
+                        if single:
+                            out.update(single)
+                            successful = True
+                    except Exception as single_exc:
+                        failed_keys.append(key)
+                        print(f"[!] Upstox {label} ({key}): {single_exc}")
+                _set_upstox_rest_status(
+                    lastError=(batch_error[:240] if failed_keys else None),
+                    lastErrorAt=time.time() if failed_keys else None,
+                    lastOkAt=time.time() if successful else _upstox_rest_status.get("lastOkAt"),
+                    failedKeys=failed_keys,
+                )
         for label in labels:
             pending.pop(label, None)
     return out
@@ -1516,11 +1653,6 @@ def fetch_upstox_index_quotes() -> dict[str, dict]:
 def _set_upstox_stream_status(**patch) -> None:
     with _lock:
         _upstox_stream_status.update(patch)
-
-
-def _clear_upstox_stream_cache() -> None:
-    with _lock:
-        _upstox_stream_quote_cache.clear()
 
 
 def _send_upstox_stream_request(ws, method: str, instrument_keys: list[str], mode: str = UPSTOX_STREAM_MODE) -> None:
@@ -1572,7 +1704,7 @@ def upstox_stream_loop() -> None:
             desiredSubscriptions=len({key for key in desired.values() if key}),
             mode=UPSTOX_STREAM_MODE,
         )
-        if requested_market_data_provider() != UPSTOX_PROVIDER_NAME or not upstox_access_token():
+        if requested_market_data_provider() != UPSTOX_PROVIDER_NAME or not upstox_configured():
             _set_upstox_stream_status(connected=False, activeSubscriptions=0)
             _upstox_stream_wakeup.wait(timeout=10)
             _upstox_stream_wakeup.clear()
@@ -1608,7 +1740,7 @@ def upstox_stream_loop() -> None:
             )
             active_keys: set[str] = set()
 
-            while requested_market_data_provider() == UPSTOX_PROVIDER_NAME and upstox_access_token():
+            while requested_market_data_provider() == UPSTOX_PROVIDER_NAME and upstox_configured():
                 desired = upstox_stream_subscription_map()
                 label_by_key = {key: label for label, key in desired.items() if key}
                 desired_keys = set(label_by_key.keys())
@@ -1671,21 +1803,14 @@ def fetch_live_quote(symbol: str) -> dict | None:
 
 
 def fetch_upstox_option_chain(underlying: str, expiry_date: str, max_rows: int = 80) -> dict:
-    if not upstox_access_token():
-        raise RuntimeError("UPSTOX_ACCESS_TOKEN is not configured")
+    if not upstox_configured():
+        raise RuntimeError("UPSTOX_ANALYTICS_TOKEN is not configured")
     underlying_key = option_underlying_key(underlying)
     if not underlying_key:
         raise ValueError(f"Unsupported Upstox option underlying: {underlying}")
     if not re.match(r"^\d{4}-\d{2}-\d{2}$", expiry_date or ""):
         raise ValueError("expiry must be provided in YYYY-MM-DD format")
-    response = http_session().get(
-        f"{upstox_api_base()}/option/chain",
-        params={"instrument_key": underlying_key, "expiry_date": expiry_date},
-        headers=upstox_headers(),
-        timeout=10,
-    )
-    response.raise_for_status()
-    payload = response.json()
+    payload = upstox_request_json(upstox_option_chain_url(underlying_key, expiry_date), timeout=10)
     if payload.get("status") not in {None, "success"}:
         raise RuntimeError(f"Upstox option-chain request failed: {payload.get('status')}")
     return summarize_upstox_option_chain(payload.get("data") or [], underlying, expiry_date, max_rows=max_rows)
@@ -2884,72 +3009,6 @@ def api_upstox_status():
     return jsonify(upstox_integration_status())
 
 
-@app.route("/api/auth/upstox/login")
-def api_upstox_login():
-    if not upstox_auth_configured():
-        return jsonify({"error": "Upstox OAuth env vars are not configured"}), 400
-    state = secrets.token_urlsafe(24)
-    persist_upstox_oauth_state(state)
-    return redirect(upstox_oauth_dialog_url(state))
-
-
-@app.route("/api/auth/upstox/callback")
-def api_upstox_callback():
-    error = request.args.get("error", "").strip()
-    if error:
-        return jsonify({"error": error, "provider": "Upstox"}), 400
-    code = request.args.get("code", "").strip()
-    state = request.args.get("state", "").strip()
-    expected_state = load_upstox_oauth_state()
-    if not code:
-        return jsonify({"error": "Missing Upstox authorization code", "provider": "Upstox"}), 400
-    if expected_state and state != expected_state:
-        return jsonify({"error": "Invalid Upstox OAuth state", "provider": "Upstox"}), 400
-    try:
-        payload = upstox_auth_token_request(code)
-    except requests.HTTPError as exc:
-        status_code = exc.response.status_code if exc.response is not None else 502
-        return jsonify({"error": "Upstox token exchange failed", "provider": "Upstox"}), status_code
-    except Exception as exc:
-        return jsonify({"error": str(exc), "provider": "Upstox"}), 502
-
-    token = str(payload.get("access_token") or payload.get("data", {}).get("access_token") or "").strip()
-    persist_upstox_token_record(
-        {
-            "access_token": token,
-            "issued_at": datetime.now(timezone.utc).isoformat(),
-            "provider": "upstox_oauth",
-        }
-    )
-    persist_upstox_oauth_state("")
-    _upstox_stream_wakeup.set()
-    return redirect("/")
-
-
-@app.route("/api/auth/upstox/disconnect", methods=["POST"])
-def api_upstox_disconnect():
-    if os.environ.get("UPSTOX_ACCESS_TOKEN", "").strip():
-        return jsonify({"error": "UPSTOX_ACCESS_TOKEN is set via environment variable; remove it from your server environment to disconnect."}), 400
-    clear_upstox_token_record()
-    _clear_upstox_stream_cache()
-    _upstox_stream_wakeup.set()
-    return jsonify({"status": "ok", "connected": False})
-
-
-@app.route("/api/auth/upstox/static-ips/sync", methods=["POST"])
-def api_upstox_static_ips_sync():
-    try:
-        payload = sync_upstox_static_ips()
-    except RuntimeError as exc:
-        return jsonify({"error": str(exc), "provider": "Upstox"}), 400
-    except requests.HTTPError as exc:
-        status_code = exc.response.status_code if exc.response is not None else 502
-        return jsonify({"error": "Upstox static IP update failed", "provider": "Upstox"}), status_code
-    except Exception as exc:
-        return jsonify({"error": str(exc), "provider": "Upstox"}), 502
-    return jsonify(payload)
-
-
 @app.route("/api/settings/refresh", methods=["GET", "POST"])
 def api_settings_refresh():
     if request.method == "POST":
@@ -3058,7 +3117,7 @@ if __name__ == "__main__":
     provider = market_data_provider_status()
     print(f"  Live {provider['active'].upper()} prices via SSE ({INTRADAY_TICK_INTERVAL_SECONDS}s intraday, {AFTER_HOURS_TICK_INTERVAL_SECONDS}s after-hours)")
     if provider["requested"] == UPSTOX_PROVIDER_NAME and provider["active"] != UPSTOX_PROVIDER_NAME:
-        print("  Upstox requested but UPSTOX_ACCESS_TOKEN is missing; using NSE fallback")
+        print("  Upstox requested but UPSTOX_ANALYTICS_TOKEN is not configured; using NSE fallback")
     print("  Ctrl+C to stop")
     print("=" * 60)
     # Do not auto-open a browser here; macOS may block it with Permission denied.

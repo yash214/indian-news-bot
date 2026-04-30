@@ -254,9 +254,14 @@ function renderMarketStatus() {
     pills.push(`<span class="sys-pill sys-muted">${escapeHtml(marketStatus.reason)}</span>`);
   }
   if (dataProvider && dataProvider.active) {
-    const providerLabel = dataProvider.active === 'upstox' ? 'Upstox live feed' : 'NSE fallback';
-    const providerClass = dataProvider.active === 'upstox' ? 'sys-ok' : 'sys-muted';
-    pills.push(`<span class="sys-pill ${providerClass}">${escapeHtml(providerLabel)}</span>`);
+    const providerLabel = dataProvider.active === 'upstox'
+      ? dataProvider.degraded ? 'Upstox degraded · NSE fallback' : 'Upstox market data'
+      : 'NSE fallback';
+    const providerClass = dataProvider.active === 'upstox'
+      ? dataProvider.degraded ? 'sys-warn' : 'sys-ok'
+      : 'sys-muted';
+    const providerTitle = dataProvider.reason ? ` title="${escapeHtml(dataProvider.reason)}"` : '';
+    pills.push(`<span class="sys-pill ${providerClass}"${providerTitle}>${escapeHtml(providerLabel)}</span>`);
   }
   const feedEntries = Object.entries(feedStatus || {});
   if (feedEntries.length) {

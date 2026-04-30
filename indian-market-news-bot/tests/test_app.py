@@ -3,7 +3,6 @@ import tempfile
 import unittest
 from unittest import mock
 from pathlib import Path
-from urllib.parse import parse_qs, urlparse
 import struct
 
 
@@ -305,41 +304,120 @@ class UpstoxProviderTests(unittest.TestCase):
         self.assertEqual(decoded["feeds"]["NSE_EQ|INE009A01021"]["ltpc"]["ltp"], 1500.5)
         self.assertEqual(decoded["feeds"]["NSE_EQ|INE009A01021"]["ltpc"]["cp"], 1490.0)
 
-    def test_upstox_access_token_uses_db_fallback(self):
-        with mock.patch.dict(app.os.environ, {"UPSTOX_ACCESS_TOKEN": ""}, clear=False):
-            with mock.patch.object(app, "stored_upstox_token_record", return_value={"access_token": "db-token"}):
-                self.assertEqual(app.upstox_access_token(), "db-token")
+    def test_upstox_uses_analytics_token_only(self):
+        with mock.patch.dict(app.os.environ, {"UPSTOX_ANALYTICS_TOKEN": "analytics-token"}, clear=False):
+            self.assertEqual(app.upstox_analytics_token(), "analytics-token")
+            self.assertTrue(app.upstox_configured())
+            self.assertEqual(app.upstox_token_source(), "analytics_env")
 
-    def test_upstox_oauth_dialog_url_contains_expected_params(self):
+    def test_upstox_headers_match_working_curl_shape(self):
+        with mock.patch.dict(app.os.environ, {"UPSTOX_ANALYTICS_TOKEN": "analytics-token"}, clear=False):
+            headers = app.upstox_headers()
+
+        self.assertEqual(headers["Accept"], "application/json")
+        self.assertEqual(headers["Authorization"], "Bearer analytics-token")
+        self.assertEqual(headers["User-Agent"], "curl/8.7.1")
+        self.assertNotIn("Content-Type", headers)
+
+    def test_upstox_html_403_retries_with_curl_transport(self):
+        app._upstox_quote_cache.clear()
+        app._upstox_stream_quote_cache.clear()
+        app._upstox_curl_preferred_until = 0.0
+        blocked_response = mock.Mock()
+        blocked_response.status_code = 403
+        blocked_response.headers = {"content-type": "text/html; charset=UTF-8"}
+        blocked_response.text = "<!DOCTYPE html><html><title>Forbidden</title></html>"
+        blocked_response.json.side_effect = ValueError("not json")
+        session = mock.Mock()
+        session.get.return_value = blocked_response
+        curl_payload = (
+            '{"status":"success","data":{"NSE_INDEX:Nifty 50":{'
+            '"instrument_token":"NSE_INDEX|Nifty 50",'
+            '"symbol":"NA",'
+            '"last_price":24000.0,'
+            '"net_change":100.0,'
+            '"ohlc":{"open":23900.0,"high":24100.0,"low":23850.0,"close":23900.0}'
+            '}}}'
+            "__MARKET_DESK_HTTP_STATUS__200"
+        )
+        completed = mock.Mock(returncode=0, stdout=curl_payload, stderr="")
+
         with mock.patch.dict(
             app.os.environ,
             {
-                "UPSTOX_CLIENT_ID": "client-123",
-                "UPSTOX_CLIENT_SECRET": "secret-456",
-                "UPSTOX_REDIRECT_URI": "https://desk.example.com/api/auth/upstox/callback",
+                "MARKET_DATA_PROVIDER": "upstox",
+                "UPSTOX_ANALYTICS_TOKEN": "analytics-token",
+                "UPSTOX_HTTP_TRANSPORT": "auto",
             },
             clear=False,
         ):
-            url = app.upstox_oauth_dialog_url("state-xyz")
+            with mock.patch.object(app, "http_session", return_value=session):
+                with mock.patch.object(app.subprocess, "run", return_value=completed) as curl_mock:
+                    quotes = app.fetch_upstox_quotes_by_label({"Nifty 50": "NSE_INDEX|Nifty 50"})
 
-        parsed = urlparse(url)
-        params = parse_qs(parsed.query)
-        self.assertEqual(parsed.path, "/v2/login/authorization/dialog")
-        self.assertEqual(params["response_type"], ["code"])
-        self.assertEqual(params["client_id"], ["client-123"])
-        self.assertEqual(params["redirect_uri"], ["https://desk.example.com/api/auth/upstox/callback"])
-        self.assertEqual(params["state"], ["state-xyz"])
+        self.assertEqual(quotes["Nifty 50"]["source"], "Upstox")
+        self.assertEqual(quotes["Nifty 50"]["price"], 24000.0)
+        session.get.assert_called_once()
+        curl_args = curl_mock.call_args.args[0]
+        curl_input = curl_mock.call_args.kwargs["input"]
+        self.assertEqual(curl_args, ["curl", "--config", "-"])
+        self.assertNotIn("analytics-token", " ".join(curl_args))
+        self.assertIn("Authorization: Bearer analytics-token", curl_input)
+        app._upstox_curl_preferred_until = 0.0
+
+    def test_upstox_forced_curl_transport_skips_requests(self):
+        app._upstox_quote_cache.clear()
+        app._upstox_stream_quote_cache.clear()
+        app._upstox_curl_preferred_until = 0.0
+        curl_payload = (
+            '{"status":"success","data":{"NSE_EQ:INFY":{'
+            '"instrument_token":"NSE_EQ|INE009A01021",'
+            '"symbol":"INFY",'
+            '"last_price":1500.0,'
+            '"net_change":10.0,'
+            '"ohlc":{"open":1490.0,"high":1510.0,"low":1488.0,"close":1490.0}'
+            '}}}'
+            "__MARKET_DESK_HTTP_STATUS__200"
+        )
+        completed = mock.Mock(returncode=0, stdout=curl_payload, stderr="")
+        session = mock.Mock()
+
+        with mock.patch.dict(
+            app.os.environ,
+            {
+                "MARKET_DATA_PROVIDER": "upstox",
+                "UPSTOX_ANALYTICS_TOKEN": "analytics-token",
+                "UPSTOX_HTTP_TRANSPORT": "curl",
+            },
+            clear=False,
+        ):
+            with mock.patch.object(app, "http_session", return_value=session):
+                with mock.patch.object(app.subprocess, "run", return_value=completed):
+                    quotes = app.fetch_upstox_quotes_by_label({"INFY": "NSE_EQ|INE009A01021"})
+
+        self.assertEqual(quotes["INFY"]["source"], "Upstox")
+        session.get.assert_not_called()
 
     def test_upstox_provider_falls_back_without_token(self):
-        with mock.patch.dict(app.os.environ, {"MARKET_DATA_PROVIDER": "upstox", "UPSTOX_ACCESS_TOKEN": ""}, clear=False):
+        with mock.patch.dict(app.os.environ, {"MARKET_DATA_PROVIDER": "upstox", "UPSTOX_ANALYTICS_TOKEN": ""}, clear=False):
             status = app.market_data_provider_status()
         self.assertEqual(status["requested"], "upstox")
         self.assertEqual(status["active"], "nse")
         self.assertFalse(status["upstoxConfigured"])
 
+    def test_upstox_provider_uses_analytics_token(self):
+        with mock.patch.dict(app.os.environ, {"MARKET_DATA_PROVIDER": "upstox", "UPSTOX_ANALYTICS_TOKEN": "analytics-token"}, clear=False):
+            status = app.market_data_provider_status()
+        self.assertEqual(status["requested"], "upstox")
+        self.assertEqual(status["active"], "upstox")
+        self.assertTrue(status["upstoxConfigured"])
+        self.assertEqual(status["upstoxTokenSource"], "analytics_env")
+        self.assertEqual(status["upstoxTokenMode"], "analytics")
+
     def test_fetch_live_quote_uses_upstox_when_configured(self):
         app._upstox_quote_cache.clear()
         response = mock.Mock()
+        response.status_code = 200
         response.raise_for_status.return_value = None
         response.json.return_value = {
             "status": "success",
@@ -359,7 +437,7 @@ class UpstoxProviderTests(unittest.TestCase):
         }
         session = mock.Mock()
         session.get.return_value = response
-        with mock.patch.dict(app.os.environ, {"MARKET_DATA_PROVIDER": "upstox", "UPSTOX_ACCESS_TOKEN": "token"}, clear=False):
+        with mock.patch.dict(app.os.environ, {"MARKET_DATA_PROVIDER": "upstox", "UPSTOX_ANALYTICS_TOKEN": "token"}, clear=False):
             with mock.patch.object(app, "http_session", return_value=session):
                 quote = app.fetch_live_quote("INFY")
 
@@ -393,12 +471,61 @@ class UpstoxProviderTests(unittest.TestCase):
             "instrumentKey": key,
         }, app.time.time())
         session = mock.Mock()
-        with mock.patch.dict(app.os.environ, {"MARKET_DATA_PROVIDER": "upstox", "UPSTOX_ACCESS_TOKEN": "token"}, clear=False):
+        with mock.patch.dict(app.os.environ, {"MARKET_DATA_PROVIDER": "upstox", "UPSTOX_ANALYTICS_TOKEN": "token"}, clear=False):
             with mock.patch.object(app, "http_session", return_value=session):
                 quote_map = app.fetch_upstox_quotes_by_label({"INFY": key})
 
         self.assertEqual(quote_map["INFY"]["source"], "Upstox V3")
         session.get.assert_not_called()
+
+    def test_upstox_quotes_url_matches_documented_separator_encoding(self):
+        url = app.upstox_quotes_url(["NSE_INDEX|Nifty 50", "NSE_INDEX|Nifty Bank"])
+        self.assertIn("instrument_key=NSE_INDEX%7CNifty%2050,NSE_INDEX%7CNifty%20Bank", url)
+        self.assertNotIn("%2C", url)
+        self.assertNotIn("+", url)
+
+    def test_fetch_upstox_quotes_retries_individually_when_batch_is_rejected(self):
+        app._upstox_quote_cache.clear()
+        app._upstox_stream_quote_cache.clear()
+        batch_response = mock.Mock()
+        batch_response.status_code = 403
+        batch_response.json.return_value = {
+            "status": "error",
+            "errors": [{"errorCode": "UDAPI100050", "message": "Forbidden"}],
+        }
+        infy_response = mock.Mock()
+        infy_response.status_code = 200
+        infy_response.json.return_value = {
+            "status": "success",
+            "data": {
+                "NSE_EQ:INFY": {
+                    "instrument_token": "NSE_EQ|INE009A01021",
+                    "symbol": "INFY",
+                    "last_price": 1500.0,
+                    "net_change": 10.0,
+                    "ohlc": {"open": 1490.0, "high": 1510.0, "low": 1488.0, "close": 1490.0},
+                },
+            },
+        }
+        tcs_response = mock.Mock()
+        tcs_response.status_code = 403
+        tcs_response.json.return_value = {
+            "status": "error",
+            "errors": [{"errorCode": "UDAPI100050", "message": "Forbidden"}],
+        }
+        session = mock.Mock()
+        session.get.side_effect = [batch_response, infy_response, tcs_response]
+
+        with mock.patch.dict(app.os.environ, {"MARKET_DATA_PROVIDER": "upstox", "UPSTOX_ANALYTICS_TOKEN": "token"}, clear=False):
+            with mock.patch.object(app, "http_session", return_value=session):
+                quotes = app.fetch_upstox_quotes_by_label({
+                    "INFY": "NSE_EQ|INE009A01021",
+                    "TCS": "NSE_EQ|INE467B01029",
+                })
+
+        self.assertEqual(quotes["INFY"]["source"], "Upstox")
+        self.assertNotIn("TCS", quotes)
+        self.assertEqual(session.get.call_count, 3)
 
     def test_refresh_quote_cache_for_symbols_keeps_nse_fallback_for_missing_upstox_quotes(self):
         upstox_quotes = {
@@ -429,13 +556,38 @@ class UpstoxProviderTests(unittest.TestCase):
             "fetchedAt": app.time.time(),
             "source": "NSE",
         }
-        with mock.patch.dict(app.os.environ, {"MARKET_DATA_PROVIDER": "upstox", "UPSTOX_ACCESS_TOKEN": "token"}, clear=False):
+        with mock.patch.dict(app.os.environ, {"MARKET_DATA_PROVIDER": "upstox", "UPSTOX_ANALYTICS_TOKEN": "token"}, clear=False):
             with mock.patch.object(app, "fetch_upstox_quotes_by_label", return_value=upstox_quotes):
                 with mock.patch.object(app, "_fetch_nse_quote", side_effect=lambda sym: nse_tcs if sym == "TCS" else None):
                     quotes = app.refresh_quote_cache_for_symbols(["INFY", "TCS"])
 
         self.assertEqual(quotes["INFY"]["source"], "Upstox")
         self.assertEqual(quotes["TCS"]["source"], "NSE")
+
+    def test_refresh_quote_cache_for_symbols_falls_back_when_upstox_errors(self):
+        nse_infy = {
+            "symbol": "INFY",
+            "name": "Infosys",
+            "price": 1500.0,
+            "previous_close": 1490.0,
+            "change": 10.0,
+            "pct": 0.67,
+            "day_high": 1510.0,
+            "day_low": 1488.0,
+            "open": 1492.0,
+            "volume": 1000.0,
+            "oi": 0.0,
+            "bid": None,
+            "ask": None,
+            "fetchedAt": app.time.time(),
+            "source": "NSE",
+        }
+        with mock.patch.dict(app.os.environ, {"MARKET_DATA_PROVIDER": "upstox", "UPSTOX_ANALYTICS_TOKEN": "token"}, clear=False):
+            with mock.patch.object(app, "fetch_upstox_quotes_by_label", side_effect=RuntimeError("403 Forbidden")):
+                with mock.patch.object(app, "_fetch_nse_quote", return_value=nse_infy):
+                    quotes = app.refresh_quote_cache_for_symbols(["INFY"])
+
+        self.assertEqual(quotes["INFY"]["source"], "NSE")
 
     def test_option_chain_summary_extracts_oi_and_flow(self):
         payload = app.summarize_upstox_option_chain(
@@ -461,28 +613,14 @@ class UpstoxProviderTests(unittest.TestCase):
         self.assertEqual(payload["summary"]["maxPutOiStrike"], 22000.0)
         self.assertEqual(payload["summary"]["flowBias"], "Call writing pressure")
 
-    def test_upstox_callback_persists_token_record(self):
-        client = app.app.test_client()
-        with mock.patch.object(app, "load_upstox_oauth_state", return_value="state-xyz"):
-            with mock.patch.object(app, "upstox_auth_token_request", return_value={"access_token": "fresh-token"}) as exchange_mock:
-                with mock.patch.object(app, "persist_upstox_token_record") as persist_mock:
-                    with mock.patch.object(app, "persist_upstox_oauth_state") as state_mock:
-                        response = client.get("/api/auth/upstox/callback?code=auth-code&state=state-xyz")
+    def test_upstox_integration_status_reports_analytics_mode(self):
+        with mock.patch.dict(app.os.environ, {"UPSTOX_ANALYTICS_TOKEN": "analytics-token"}, clear=False):
+            status = app.upstox_integration_status()
 
-        self.assertEqual(response.status_code, 302)
-        self.assertEqual(response.headers["Location"], "/")
-        exchange_mock.assert_called_once_with("auth-code")
-        persist_mock.assert_called_once()
-        state_mock.assert_called_once_with("")
-
-    def test_upstox_integration_status_reports_static_ip_config(self):
-        with mock.patch.dict(app.os.environ, {"UPSTOX_PRIMARY_IP": "1.2.3.4", "UPSTOX_SECONDARY_IP": ""}, clear=False):
-            with mock.patch.object(app, "upstox_access_token", return_value="token"):
-                status = app.upstox_integration_status()
-
-        self.assertTrue(status["staticIpConfigured"])
-        self.assertTrue(status["staticIpSyncReady"])
-        self.assertEqual(status["primaryIp"], "1.2.3.4")
+        self.assertTrue(status["connected"])
+        self.assertTrue(status["readOnly"])
+        self.assertEqual(status["credential"], "UPSTOX_ANALYTICS_TOKEN")
+        self.assertEqual(status["tokenMode"], "analytics")
 
     def test_background_threads_are_disabled_during_unittest(self):
         self.assertFalse(app.background_threads_enabled())

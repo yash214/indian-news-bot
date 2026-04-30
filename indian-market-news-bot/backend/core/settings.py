@@ -33,6 +33,3 @@ ALLOWED_REFRESH_WINDOWS = [60, 120, 300, 600, 900]
 
 AI_SUMMARY_PROMPT_VERSION = "brief-v8-material-facts-market-impact"
 AI_ARTICLE_ANALYSIS_PROMPT_VERSION = "article-analysis-v4-material-facts-index-impact"
-
-UPSTOX_AUTH_STATE_KEY = "upstox_oauth_state"
-UPSTOX_AUTH_TOKEN_KEY = "upstox_auth_token"

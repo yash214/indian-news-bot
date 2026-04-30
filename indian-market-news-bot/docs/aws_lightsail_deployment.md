@@ -36,11 +36,7 @@ dig +short www.stockterminal.in
 
 Both should return the Lightsail static IP.
 
-In Upstox app settings:
-
-- Redirect URL: `https://stockterminal.in/api/auth/upstox/callback`
-- Primary IP: your Lightsail static IPv4
-- Secondary IP: blank unless you add a second failover server
+Upstox now uses the Analytics Token path only, so there is no OAuth callback or Upstox static-IP sync step in this app.
 
 ## 3. Server Bootstrap
 
@@ -131,11 +127,9 @@ MARKET_DESK_DISABLE_THREADS=1
 
 MARKET_DATA_PROVIDER=upstox
 UPSTOX_FALLBACK_TO_NSE=1
-UPSTOX_CLIENT_ID=<UPSTOX_API_KEY>
-UPSTOX_CLIENT_SECRET=<UPSTOX_API_SECRET>
-UPSTOX_REDIRECT_URI=https://stockterminal.in/api/auth/upstox/callback
-UPSTOX_PRIMARY_IP=<LIGHTSAIL_STATIC_IP>
-UPSTOX_SECONDARY_IP=
+UPSTOX_ANALYTICS_TOKEN=<UPSTOX_ANALYTICS_TOKEN>
+UPSTOX_HTTP_TRANSPORT=auto
+UPSTOX_USER_AGENT=curl/8.7.1
 
 ENABLE_AI_NEWS_SUMMARIES=1
 ENABLE_ARTICLE_EXTRACTION=1
@@ -247,24 +241,19 @@ curl -I https://stockterminal.in/
 Expected:
 
 - `/api/health` returns JSON.
-- `dataProvider.active` is `upstox` after OAuth succeeds, otherwise `nse`.
+- `dataProvider.active` is `upstox` when `UPSTOX_ANALYTICS_TOKEN` is valid, otherwise `nse`.
 - `newsCount` and `tickerCount` should be greater than zero after the worker refreshes.
 
-## 9. Complete Upstox OAuth
+## 9. Verify Upstox Analytics Token
 
-Open this in your browser:
-
-```text
-https://stockterminal.in/api/auth/upstox/login
-```
-
-After login, check:
+After setting `UPSTOX_ANALYTICS_TOKEN`, restart the services and check:
 
 ```bash
+sudo systemctl restart market-desk market-desk-worker
 curl -s https://stockterminal.in/api/integrations/upstox/status
 ```
 
-The app should show Upstox configured and connected. If the token fails after changing static IPs, complete OAuth again.
+The app should show `connected: true`, `tokenMode: analytics`, and `readOnly: true`. If Upstox rejects the token, the app will continue through NSE fallback while you regenerate or correct the Analytics Token.
 
 ## 10. Upgrade Checklist
 

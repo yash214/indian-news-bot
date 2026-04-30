@@ -16,7 +16,6 @@ try:
         DATA_DIR,
         DEFAULT_APP_STATE,
         STATE_DB_PATH,
-        UPSTOX_AUTH_STATE_KEY,
         WATCHLIST_SYMBOL_LIMIT,
     )
 except ModuleNotFoundError:
@@ -27,7 +26,6 @@ except ModuleNotFoundError:
         DATA_DIR,
         DEFAULT_APP_STATE,
         STATE_DB_PATH,
-        UPSTOX_AUTH_STATE_KEY,
         WATCHLIST_SYMBOL_LIMIT,
     )
 
@@ -344,18 +342,3 @@ def load_refresh_settings(path: Path = STATE_DB_PATH) -> int:
 
 def persist_refresh_settings(seconds: int, path: Path = STATE_DB_PATH) -> None:
     db_set_json("settings", {"refreshInterval": seconds}, path=path)
-
-
-def persist_upstox_oauth_state(state: str, path: Path = STATE_DB_PATH) -> None:
-    db_set_json(
-        UPSTOX_AUTH_STATE_KEY,
-        {"state": state, "createdAt": datetime.now(timezone.utc).isoformat()},
-        path=path,
-    )
-
-
-def load_upstox_oauth_state(path: Path = STATE_DB_PATH) -> str:
-    record = db_get_json(UPSTOX_AUTH_STATE_KEY, default={}, path=path)
-    if not isinstance(record, dict):
-        return ""
-    return str(record.get("state", "")).strip()
