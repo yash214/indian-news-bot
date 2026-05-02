@@ -6,9 +6,9 @@ import re
 from html.parser import HTMLParser
 
 try:
-    from backend.news.text import normalized_headline, trim_text_boundary
+    from backend.agents.news.text import normalized_headline, trim_text_boundary
 except ModuleNotFoundError:
-    from news.text import normalized_headline, trim_text_boundary
+    from agents.news.text import normalized_headline, trim_text_boundary
 
 
 _NOISE_PHRASES = (

@@ -5,10 +5,10 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from backend.news.agent import NewsIntelligenceAgent
-from backend.news.report_aggregator import NewsReportAggregator
-from backend.news.report_store import load_recent_article_ai_analyses, save_article_ai_analysis
-from backend.news.schemas import ArticleAIAnalysis, EventRisk, StrategyEngineGuidance
+from backend.agents.news.agent import NewsIntelligenceAgent
+from backend.agents.news.report_aggregator import NewsReportAggregator
+from backend.agents.news.report_store import load_recent_article_ai_analyses, save_article_ai_analysis
+from backend.agents.news.schemas import ArticleAIAnalysis, EventRisk, StrategyEngineGuidance
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]

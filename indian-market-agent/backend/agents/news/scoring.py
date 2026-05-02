@@ -8,13 +8,13 @@ from datetime import datetime
 
 try:
     from backend.market.math import clamp
-    from backend.news.sources import LOCAL_SCOPE
-    from backend.news.text import keyword_found
+    from backend.agents.news.sources import LOCAL_SCOPE
+    from backend.agents.news.text import keyword_found
     from backend.core.settings import IST
 except ModuleNotFoundError:
     from market.math import clamp
-    from news.sources import LOCAL_SCOPE
-    from news.text import keyword_found
+    from agents.news.sources import LOCAL_SCOPE
+    from agents.news.text import keyword_found
     from core.settings import IST
 
 

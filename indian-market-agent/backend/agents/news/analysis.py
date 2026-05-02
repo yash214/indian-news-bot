@@ -6,9 +6,9 @@ import json
 import re
 
 try:
-    from backend.news.summaries import normalize_ai_summary
+    from backend.agents.news.summaries import normalize_ai_summary
 except ModuleNotFoundError:
-    from news.summaries import normalize_ai_summary
+    from agents.news.summaries import normalize_ai_summary
 
 
 VALID_SENTIMENTS = {"bullish", "bearish", "neutral"}
@@ -114,9 +114,9 @@ def normalize_article_analysis(payload: dict, fallback_article: dict | None = No
         payload = {}
     fallback_article = fallback_article or {}
     try:
-        from backend.news.agent import NewsIntelligenceAgent, article_analysis_to_legacy_dict
+        from backend.agents.news.agent import NewsIntelligenceAgent, article_analysis_to_legacy_dict
     except ModuleNotFoundError:
-        from news.agent import NewsIntelligenceAgent, article_analysis_to_legacy_dict
+        from agents.news.agent import NewsIntelligenceAgent, article_analysis_to_legacy_dict
 
     analysis = NewsIntelligenceAgent().normalize_llm_analysis(fallback_article, payload, None)
     return article_analysis_to_legacy_dict(analysis)

@@ -70,7 +70,7 @@ try:
         sanitize_state_patch,
         sanitize_symbols,
     )
-    from backend.news.sources import GLOBAL_SCOPE, LOCAL_SCOPE, RSS_FEEDS, google_news_search_rss, news_feed
+    from backend.agents.news.sources import GLOBAL_SCOPE, LOCAL_SCOPE, RSS_FEEDS, google_news_search_rss, news_feed
     from backend.market.catalog import (
         ANALYTICS_INDEX_NAMES,
         INDEX_HISTORY_SYMBOLS,
@@ -110,7 +110,7 @@ try:
         sma,
         trend_label,
     )
-    from backend.news.scoring import (
+    from backend.agents.news.scoring import (
         BEARISH,
         BULLISH,
         IMPACT_EVENTS,
@@ -131,21 +131,21 @@ try:
         source_impact_score,
         weighted_keyword_hits,
     )
-    from backend.news.ai import NewsAiSummaryService
-    from backend.news.analysis import build_article_analysis_prompt, extract_json_object, normalize_article_analysis
-    from backend.news.report_aggregator import NewsReportAggregator
-    from backend.news.report_store import (
+    from backend.agents.news.ai import NewsAiSummaryService
+    from backend.agents.news.analysis import build_article_analysis_prompt, extract_json_object, normalize_article_analysis
+    from backend.agents.news.report_aggregator import NewsReportAggregator
+    from backend.agents.news.report_store import (
         load_recent_article_ai_analyses,
         save_article_ai_analysis,
         save_index_news_report,
     )
-    from backend.news.summaries import (
+    from backend.agents.news.summaries import (
         build_news_summary_prompt,
         extract_ollama_response_text,
         normalize_ai_summary,
         summary_needs_ai,
     )
-    from backend.news.article_extract import article_text_is_useful, extract_article_text
+    from backend.agents.news.article_extract import article_text_is_useful, extract_article_text
     from backend.providers.ai import (
         AiProviderConfigurationError,
         ai_model_name_from_env,
@@ -164,7 +164,7 @@ try:
     from backend.providers.upstox.v3_proto import decode_feed_response
     from backend.providers.upstox.live import build_stream_request, stream_authorize_url, stream_quote_from_feed
     from backend.providers.stooq import stooq_page_url, stooq_quote_from_csv, stooq_quote_from_html, stooq_quote_url
-    from backend.news.text import (
+    from backend.agents.news.text import (
         build_article_preview,
         clean_headline,
         clean_summary,
@@ -211,7 +211,7 @@ except ModuleNotFoundError:
         sanitize_state_patch,
         sanitize_symbols,
     )
-    from news.sources import GLOBAL_SCOPE, LOCAL_SCOPE, RSS_FEEDS, google_news_search_rss, news_feed
+    from agents.news.sources import GLOBAL_SCOPE, LOCAL_SCOPE, RSS_FEEDS, google_news_search_rss, news_feed
     from market.catalog import (
         ANALYTICS_INDEX_NAMES,
         INDEX_HISTORY_SYMBOLS,
@@ -251,7 +251,7 @@ except ModuleNotFoundError:
         sma,
         trend_label,
     )
-    from news.scoring import (
+    from agents.news.scoring import (
         BEARISH,
         BULLISH,
         IMPACT_EVENTS,
@@ -272,21 +272,21 @@ except ModuleNotFoundError:
         source_impact_score,
         weighted_keyword_hits,
     )
-    from news.ai import NewsAiSummaryService
-    from news.analysis import build_article_analysis_prompt, extract_json_object, normalize_article_analysis
-    from news.report_aggregator import NewsReportAggregator
-    from news.report_store import (
+    from agents.news.ai import NewsAiSummaryService
+    from agents.news.analysis import build_article_analysis_prompt, extract_json_object, normalize_article_analysis
+    from agents.news.report_aggregator import NewsReportAggregator
+    from agents.news.report_store import (
         load_recent_article_ai_analyses,
         save_article_ai_analysis,
         save_index_news_report,
     )
-    from news.summaries import (
+    from agents.news.summaries import (
         build_news_summary_prompt,
         extract_ollama_response_text,
         normalize_ai_summary,
         summary_needs_ai,
     )
-    from news.article_extract import article_text_is_useful, extract_article_text
+    from agents.news.article_extract import article_text_is_useful, extract_article_text
     from providers.ai import (
         AiProviderConfigurationError,
         ai_model_name_from_env,
@@ -305,7 +305,7 @@ except ModuleNotFoundError:
     from providers.upstox.v3_proto import decode_feed_response
     from providers.upstox.live import build_stream_request, stream_authorize_url, stream_quote_from_feed
     from providers.stooq import stooq_page_url, stooq_quote_from_csv, stooq_quote_from_html, stooq_quote_url
-    from news.text import (
+    from agents.news.text import (
         build_article_preview,
         clean_headline,
         clean_summary,
@@ -3963,6 +3963,8 @@ def api_news_ai_summaries():
     })
 
 
+# TODO: Move these News Agent routes into backend.routes.news_agent_routes
+# after the Flask app is converted to blueprints.
 @app.route("/api/news/agent/report")
 def api_news_agent_report():
     index = request.args.get("index", "NIFTY")

@@ -8,10 +8,10 @@ from datetime import datetime, timezone
 
 try:
     from backend.core.settings import IST
-    from backend.news.scoring import classify, impact_details, sentiment
-    from backend.news.summaries import normalize_ai_summary
-    from backend.news.text import clean_summary, url_hash
-    from backend.news.schemas import (
+    from backend.agents.news.scoring import classify, impact_details, sentiment
+    from backend.agents.news.summaries import normalize_ai_summary
+    from backend.agents.news.text import clean_summary, url_hash
+    from backend.agents.news.schemas import (
         ArticleAIAnalysis,
         EventRisk,
         StrategyEngineGuidance,
@@ -23,10 +23,10 @@ try:
     )
 except ModuleNotFoundError:
     from core.settings import IST
-    from news.scoring import classify, impact_details, sentiment
-    from news.summaries import normalize_ai_summary
-    from news.text import clean_summary, url_hash
-    from news.schemas import (
+    from agents.news.scoring import classify, impact_details, sentiment
+    from agents.news.summaries import normalize_ai_summary
+    from agents.news.text import clean_summary, url_hash
+    from agents.news.schemas import (
         ArticleAIAnalysis,
         EventRisk,
         StrategyEngineGuidance,

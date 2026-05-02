@@ -12,19 +12,19 @@ from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import urlparse
 
 try:
-    from backend.news.analysis import build_article_analysis_prompt, extract_json_object, normalize_article_analysis
-    from backend.news.summaries import build_news_summary_prompt, normalize_ai_summary
-    from backend.news.article_extract import article_text_is_useful, extract_article_text
-    from backend.news.text import url_hash
-    from backend.news.url_resolver import is_google_news_url, resolve_google_news_url
+    from backend.agents.news.analysis import build_article_analysis_prompt, extract_json_object, normalize_article_analysis
+    from backend.agents.news.summaries import build_news_summary_prompt, normalize_ai_summary
+    from backend.agents.news.article_extract import article_text_is_useful, extract_article_text
+    from backend.agents.news.text import url_hash
+    from backend.agents.news.url_resolver import is_google_news_url, resolve_google_news_url
     from backend.core.settings import AI_ARTICLE_ANALYSIS_PROMPT_VERSION, AI_SUMMARY_PROMPT_VERSION
     from backend.providers.ai import ai_model_name_from_env, ai_provider_name_from_env, create_ai_text_provider
 except ModuleNotFoundError:
-    from news.analysis import build_article_analysis_prompt, extract_json_object, normalize_article_analysis
-    from news.summaries import build_news_summary_prompt, normalize_ai_summary
-    from news.article_extract import article_text_is_useful, extract_article_text
-    from news.text import url_hash
-    from news.url_resolver import is_google_news_url, resolve_google_news_url
+    from agents.news.analysis import build_article_analysis_prompt, extract_json_object, normalize_article_analysis
+    from agents.news.summaries import build_news_summary_prompt, normalize_ai_summary
+    from agents.news.article_extract import article_text_is_useful, extract_article_text
+    from agents.news.text import url_hash
+    from agents.news.url_resolver import is_google_news_url, resolve_google_news_url
     from core.settings import AI_ARTICLE_ANALYSIS_PROMPT_VERSION, AI_SUMMARY_PROMPT_VERSION
     from providers.ai import ai_model_name_from_env, ai_provider_name_from_env, create_ai_text_provider
 

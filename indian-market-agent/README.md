@@ -1,12 +1,15 @@
-# Indian Market News Bot
+# Indian Market Agent
 
-This repo contains a Flask backend plus a static frontend for an India-focused market dashboard with news scoring, analytics, derivatives context, and optional Upstox-backed market data.
+This repo contains a Flask backend plus a static frontend for an India-focused market agent platform with news intelligence, analytics, derivatives context, and optional Upstox-backed market data.
 
 ## Project Layout
 
 - `backend/app.py`: Flask API routes, polling loops, runtime orchestration, and provider fallback wiring
 - `backend/core/`: runtime settings and SQLite persistence
-- `backend/news/`: RSS sources, article extraction, news scoring, AI prompts, and AI summary queueing
+- `backend/agents/news/`: RSS sources, article extraction, news scoring, AI prompts, AI summary queueing, and News Intelligence Agent reports
+- `backend/news/`: temporary compatibility bridges for older imports
+- `backend/shared/`: shared constants and helpers for platform modules
+- `backend/routes/`: future Flask route modules
 - `backend/market/`: symbol catalogs, NSE/Yahoo/Upstox mappings, and reusable market math
 - `backend/providers/upstox/`: Upstox quote parsing, Market Data Feed V3 helpers, live feed client, and option-chain summarization
 - `backend/worker.py`: production worker entrypoint for news polling, market refresh, Upstox streaming, and AI queue work
@@ -19,7 +22,7 @@ This repo contains a Flask backend plus a static frontend for an India-focused m
 ## Run Locally
 
 ```bash
-cd /Users/yashkumar/Documents/claude-projects/indian-market-news-bot
+cd /Users/yashkumar/Documents/claude-projects/indian-market-agent
 pip install -r requirements.txt
 python backend/app.py
 ```
@@ -60,20 +63,20 @@ The repo now includes a Lightsail-oriented deployment path built around:
 
 Included files:
 
-- [deploy/lightsail/market-desk.service](/Users/yashkumar/Documents/claude-projects/indian-market-news-bot/deploy/lightsail/market-desk.service)
-- [deploy/lightsail/market-desk-worker.service](/Users/yashkumar/Documents/claude-projects/indian-market-news-bot/deploy/lightsail/market-desk-worker.service)
-- [deploy/lightsail/market-desk.env.example](/Users/yashkumar/Documents/claude-projects/indian-market-news-bot/deploy/lightsail/market-desk.env.example)
-- [deploy/lightsail/nginx-market-desk.conf](/Users/yashkumar/Documents/claude-projects/indian-market-news-bot/deploy/lightsail/nginx-market-desk.conf)
+- [deploy/lightsail/market-desk.service](/Users/yashkumar/Documents/claude-projects/indian-market-agent/deploy/lightsail/market-desk.service)
+- [deploy/lightsail/market-desk-worker.service](/Users/yashkumar/Documents/claude-projects/indian-market-agent/deploy/lightsail/market-desk-worker.service)
+- [deploy/lightsail/market-desk.env.example](/Users/yashkumar/Documents/claude-projects/indian-market-agent/deploy/lightsail/market-desk.env.example)
+- [deploy/lightsail/nginx-market-desk.conf](/Users/yashkumar/Documents/claude-projects/indian-market-agent/deploy/lightsail/nginx-market-desk.conf)
 
 Recommended flow:
 
 1. Launch an Ubuntu Lightsail instance and attach a static IP.
 2. Point a domain or subdomain to that static IP.
-3. Clone this repo to `/srv/indian-news-bot/indian-market-news-bot`.
+3. Clone this repo to `/srv/indian-news-bot/indian-market-agent`.
 4. Create a virtualenv and install dependencies:
 
 ```bash
-cd /srv/indian-news-bot/indian-market-news-bot
+cd /srv/indian-news-bot/indian-market-agent
 python3 -m venv .venv
 . .venv/bin/activate
 pip install -r requirements.txt
@@ -88,7 +91,7 @@ cp deploy/lightsail/market-desk.env.example deploy/lightsail/market-desk.env
 Important values:
 
 ```text
-MARKET_DESK_DATA_DIR=/srv/indian-news-bot/indian-market-news-bot/backend/data
+MARKET_DESK_DATA_DIR=/srv/indian-news-bot/indian-market-agent/backend/data
 MARKET_DESK_DISABLE_THREADS=1
 MARKET_DATA_PROVIDER=upstox
 UPSTOX_ANALYTICS_TOKEN=<your_upstox_analytics_token>
@@ -137,7 +140,7 @@ Notes:
 
 For the full production upgrade path for the existing `stockterminal.in` site, follow:
 
-- [docs/aws_lightsail_deployment.md](/Users/yashkumar/Documents/claude-projects/indian-market-news-bot/docs/aws_lightsail_deployment.md)
+- [docs/aws_lightsail_deployment.md](/Users/yashkumar/Documents/claude-projects/indian-market-agent/docs/aws_lightsail_deployment.md)
 
 ## Validation
 

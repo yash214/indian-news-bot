@@ -15,7 +15,7 @@ app = importlib.util.module_from_spec(spec)
 assert spec.loader is not None
 spec.loader.exec_module(app)
 
-from backend.news.url_resolver import resolve_google_news_url
+from backend.agents.news.url_resolver import resolve_google_news_url
 
 
 def pb_varint(value: int) -> bytes:

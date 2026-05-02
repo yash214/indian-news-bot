@@ -4,9 +4,9 @@ import json
 import re
 
 try:
-    from backend.news.text import clean_summary, normalized_headline
+    from backend.agents.news.text import clean_summary, normalized_headline
 except ModuleNotFoundError:
-    from news.text import clean_summary, normalized_headline
+    from agents.news.text import clean_summary, normalized_headline
 
 
 def summary_needs_ai(title: str, summary: str, min_chars: int = 220) -> bool:

@@ -7,10 +7,10 @@ from datetime import datetime, timezone
 
 try:
     from backend.market.math import clamp
-    from backend.news.schemas import ArticleAIAnalysis, IndexNewsReport, StrategyEngineGuidance
+    from backend.agents.news.schemas import ArticleAIAnalysis, IndexNewsReport, StrategyEngineGuidance
 except ModuleNotFoundError:
     from market.math import clamp
-    from news.schemas import ArticleAIAnalysis, IndexNewsReport, StrategyEngineGuidance
+    from agents.news.schemas import ArticleAIAnalysis, IndexNewsReport, StrategyEngineGuidance
 
 
 SENTIMENT_VALUE = {"bullish": 1.0, "neutral": 0.0, "bearish": -1.0}

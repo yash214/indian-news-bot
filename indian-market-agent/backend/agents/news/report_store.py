@@ -10,13 +10,13 @@ from pathlib import Path
 try:
     from backend.core.persistence import db_connect, init_state_db
     from backend.core.settings import STATE_DB_PATH
-    from backend.news.schemas import ArticleAIAnalysis, EventRisk, IndexNewsReport, StrategyEngineGuidance
-    from backend.news.text import url_hash
+    from backend.agents.news.schemas import ArticleAIAnalysis, EventRisk, IndexNewsReport, StrategyEngineGuidance
+    from backend.agents.news.text import url_hash
 except ModuleNotFoundError:
     from core.persistence import db_connect, init_state_db
     from core.settings import STATE_DB_PATH
-    from news.schemas import ArticleAIAnalysis, EventRisk, IndexNewsReport, StrategyEngineGuidance
-    from news.text import url_hash
+    from agents.news.schemas import ArticleAIAnalysis, EventRisk, IndexNewsReport, StrategyEngineGuidance
+    from agents.news.text import url_hash
 
 
 def ensure_news_agent_tables(path: Path = STATE_DB_PATH) -> None:
