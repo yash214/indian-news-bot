@@ -47,6 +47,16 @@ def score_factor(name: str, factor: MacroFactorInput | None) -> MacroFactorScore
         return _score_india_vix(factor)
     if clean == "global_cues":
         return _score_global_cues(factor)
+    if clean == "fii_fpi_flows":
+        return _score_fii_fpi_flows(factor)
+    if clean == "india_bond_yield":
+        return _score_india_bond_yield(factor)
+    if clean == "rbi_policy":
+        return _score_rbi_policy(factor)
+    if clean == "india_macro_data":
+        return _score_india_macro_data(factor)
+    if clean == "money_market":
+        return _score_money_market(factor)
     return MacroFactorScore(
         name=factor.name,
         symbol=factor.symbol,
@@ -216,6 +226,68 @@ def _score_global_cues(factor: MacroFactorInput) -> MacroFactorScore:
     return _build_score(factor, "NEUTRAL", 2, 0.62, reason)
 
 
+def _score_fii_fpi_flows(factor: MacroFactorInput) -> MacroFactorScore:
+    raw = factor.raw if isinstance(factor.raw, dict) else {}
+    bias = str(raw.get("flow_bias") or "NEUTRAL").upper()
+    impact = _safe_int(raw.get("impact"), 2)
+    confidence = _safe_float(raw.get("confidence")) or 0.6
+    reason = str(raw.get("reason") or "FPI/FII flows are not showing a strong bias.")
+    return _build_score(factor, bias if bias in {"BULLISH", "BEARISH", "NEUTRAL"} else "NEUTRAL", impact, confidence, reason)
+
+
+def _score_india_bond_yield(factor: MacroFactorInput) -> MacroFactorScore:
+    raw = factor.raw if isinstance(factor.raw, dict) else {}
+    change_bps = _safe_float(raw.get("india_10y_change_bps"))
+    if change_bps is None:
+        return _missing_score(factor, "India 10Y yield change is unavailable.")
+    if change_bps >= 20:
+        return _build_score(factor, "BEARISH", 8, 0.8, "A sharp India 10Y yield spike can weigh on domestic risk appetite.")
+    if change_bps >= 10:
+        return _build_score(factor, "BEARISH", 6, 0.72, "India 10Y yields are rising enough to warrant caution.")
+    if change_bps <= -10:
+        return _build_score(factor, "BULLISH", 5, 0.68, "Lower India 10Y yields can ease rate pressure.")
+    return _build_score(factor, "NEUTRAL", 2, 0.55, "India 10Y yields are stable.")
+
+
+def _score_rbi_policy(factor: MacroFactorInput) -> MacroFactorScore:
+    raw = factor.raw if isinstance(factor.raw, dict) else {}
+    bias = str(raw.get("policy_bias") or "NEUTRAL").upper()
+    impact = _safe_int(raw.get("impact"), 3)
+    confidence = _safe_float(raw.get("confidence")) or 0.58
+    reason = str(raw.get("reason") or "RBI policy snapshot is steady.")
+    if raw.get("event_risk"):
+        return _build_score(factor, "EVENT_RISK", max(impact, 8), max(confidence, 0.82), reason)
+    return _build_score(factor, bias if bias in {"BULLISH", "BEARISH", "NEUTRAL"} else "NEUTRAL", impact, confidence, reason)
+
+
+def _score_india_macro_data(factor: MacroFactorInput) -> MacroFactorScore:
+    raw = factor.raw if isinstance(factor.raw, dict) else {}
+    cpi = _safe_float(raw.get("cpi_yoy"))
+    gdp = _safe_float(raw.get("gdp_growth_yoy"))
+    iip = _safe_float(raw.get("iip_yoy"))
+    if cpi is not None and cpi > 6:
+        return _build_score(factor, "CAUTION", 7, 0.74, "Elevated CPI is a domestic macro headwind.")
+    if cpi is not None and cpi < 5:
+        return _build_score(factor, "BULLISH", 4, 0.64, "Cooling CPI is modestly supportive.")
+    if gdp is not None and gdp < 5:
+        return _build_score(factor, "BEARISH", 6, 0.7, "Weak GDP growth can weigh on domestic sentiment.")
+    if gdp is not None and gdp > 7:
+        return _build_score(factor, "BULLISH", 6, 0.72, "Strong GDP growth supports domestic macro confidence.")
+    if iip is not None and iip < 2:
+        return _build_score(factor, "CAUTION", 4, 0.6, "Weak IIP warrants mild growth caution.")
+    return _build_score(factor, "NEUTRAL", 2, 0.52, str(raw.get("reason") or "India macro data is broadly balanced."))
+
+
+def _score_money_market(factor: MacroFactorInput) -> MacroFactorScore:
+    raw = factor.raw if isinstance(factor.raw, dict) else {}
+    stress = str(raw.get("money_market_stress") or "UNKNOWN").upper()
+    if stress == "HIGH":
+        return _build_score(factor, "CAUTION", 7, 0.75, "High money-market stress can signal tighter liquidity conditions.")
+    if stress == "CAUTION":
+        return _build_score(factor, "CAUTION", 5, 0.65, "Money-market conditions deserve caution.")
+    return _build_score(factor, "NEUTRAL", 2, 0.5, str(raw.get("reason") or "Money-market conditions look stable."))
+
+
 def _build_score(factor: MacroFactorInput, bias: str, impact: int, confidence: float, reason: str) -> MacroFactorScore:
     return MacroFactorScore(
         name=factor.name,
@@ -264,3 +336,12 @@ def _safe_float(value) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _safe_int(value, default: int = 0) -> int:
+    try:
+        if value in (None, ""):
+            return default
+        return int(round(float(value)))
+    except (TypeError, ValueError):
+        return default

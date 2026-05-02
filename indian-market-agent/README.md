@@ -10,7 +10,7 @@ This repo contains a Flask backend plus a static frontend for an India-focused m
 - `backend/news/`: temporary compatibility bridges for older imports
 - `backend/shared/`: shared constants and helpers for platform modules
 - `backend/routes/`: future Flask route modules
-- `backend/market/`: symbol catalogs, NSE/Yahoo/Upstox mappings, and reusable market math
+- `backend/market/`: symbol catalogs, NSE/Upstox mappings, and reusable market math
 - `backend/providers/upstox/`: Upstox quote parsing, Market Data Feed V3 helpers, live feed client, and option-chain summarization
 - `backend/worker.py`: production worker entrypoint for news polling, market refresh, Upstox streaming, and AI queue work
 - `frontend/`: static HTML, CSS, and vanilla JavaScript dashboard

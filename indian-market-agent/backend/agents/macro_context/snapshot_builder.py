@@ -97,20 +97,85 @@ class MacroSnapshotBuilder:
             vix_status.mark_error(str(exc), using_fallback=True)
         source_status["india_vix"] = vix_status.to_dict()
 
-        for provider_name, provider in {
-            "rbi": self.rbi_provider,
-            "mospi": self.mospi_provider,
-            "nsdl": self.nsdl_provider,
-            "ccil": self.ccil_provider,
-        }.items():
-            source_status[provider_name] = SourceStatus(
-                provider=provider_name,
-                enabled=False,
-                configured=False,
-                last_error="Provider stub only. TODO: implement source integration.",
-                using_fallback=True,
-                stale=True,
-            ).to_dict()
+        try:
+            nsdl_flows = self.nsdl_provider.get_latest_fpi_flows()
+            if nsdl_flows:
+                factors["fii_fpi_flows"] = _factor_from_provider("fii_fpi_flows", {
+                    "symbol": "NSDL_FPI",
+                    "value": nsdl_flows.get("equity_net_inr_cr"),
+                    "source": nsdl_flows.get("source"),
+                    "raw": nsdl_flows,
+                })
+        except Exception:
+            pass
+        source_status["nsdl"] = self.nsdl_provider.source_status()
+
+        try:
+            bond_snapshot = self.ccil_provider.get_bond_market_snapshot()
+            if bond_snapshot:
+                factors["india_bond_yield"] = _factor_from_provider("india_bond_yield", {
+                    "symbol": "INDIA_10Y",
+                    "value": bond_snapshot.get("india_10y_yield"),
+                    "source": bond_snapshot.get("source"),
+                    "raw": bond_snapshot,
+                })
+            money_market = self.ccil_provider.get_money_market_snapshot()
+            if money_market:
+                factors["money_market"] = _factor_from_provider("money_market", {
+                    "symbol": "CCIL_MM",
+                    "value": None,
+                    "source": money_market.get("source"),
+                    "raw": money_market,
+                })
+        except Exception:
+            pass
+        source_status["ccil"] = self.ccil_provider.source_status()
+
+        try:
+            rbi_policy = self.rbi_provider.get_policy_rate_snapshot()
+            if rbi_policy:
+                factors["rbi_policy"] = _factor_from_provider("rbi_policy", {
+                    "symbol": "RBI_POLICY",
+                    "value": rbi_policy.get("repo_rate"),
+                    "source": rbi_policy.get("source"),
+                    "raw": rbi_policy,
+                })
+            for event in self.rbi_provider.get_policy_calendar() or []:
+                macro_event = _event_from_provider(event)
+                if macro_event:
+                    events.append(macro_event)
+        except Exception:
+            pass
+        source_status["rbi"] = self.rbi_provider.source_status()
+
+        try:
+            cpi = self.mospi_provider.get_latest_cpi()
+            gdp = self.mospi_provider.get_latest_gdp()
+            iip = self.mospi_provider.get_latest_iip()
+            if any([cpi, gdp, iip]):
+                merged = {
+                    "source": "mospi",
+                    "as_of_date": (cpi or gdp or iip or {}).get("as_of_date"),
+                    "cpi_yoy": (cpi or {}).get("cpi_yoy"),
+                    "gdp_growth_yoy": (gdp or {}).get("gdp_growth_yoy"),
+                    "iip_yoy": (iip or {}).get("iip_yoy"),
+                    "impact": max((item or {}).get("impact", 0) for item in [cpi, gdp, iip]),
+                    "confidence": max((item or {}).get("confidence", 0.0) for item in [cpi, gdp, iip]),
+                    "reason": "; ".join([str((item or {}).get("reason") or "").strip() for item in [cpi, gdp, iip] if (item or {}).get("reason")]).strip("; "),
+                }
+                factors["india_macro_data"] = _factor_from_provider("india_macro_data", {
+                    "symbol": "MOSPI_MACRO",
+                    "value": merged.get("cpi_yoy") or merged.get("gdp_growth_yoy") or merged.get("iip_yoy"),
+                    "source": merged.get("source"),
+                    "raw": merged,
+                })
+            for event in self.mospi_provider.get_release_calendar() or []:
+                macro_event = _event_from_provider(event)
+                if macro_event:
+                    events.append(macro_event)
+        except Exception:
+            pass
+        source_status["mospi"] = self.mospi_provider.source_status()
 
         return MacroSnapshot(
             market="INDIA",

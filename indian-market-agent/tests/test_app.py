@@ -287,23 +287,7 @@ class NewsScoringTests(unittest.TestCase):
 
 class UpstoxProviderTests(unittest.TestCase):
     def setUp(self):
-        app._stooq_quote_cache.clear()
-        app._stooq_status.update({
-            "lastError": None,
-            "lastErrorAt": None,
-            "lastOkAt": None,
-            "lastLatencyMs": None,
-            "failedSymbols": [],
-            "blockedUntil": None,
-        })
-        app._yahoo_cache.clear()
-        app._yahoo_status.update({
-            "lastError": None,
-            "lastErrorAt": None,
-            "lastOkAt": None,
-            "failedSymbols": [],
-            "blockedUntil": None,
-        })
+        pass
 
     def test_decode_feed_response_parses_live_feed_ltpc_message(self):
         ltpc_payload = (
@@ -343,204 +327,6 @@ class UpstoxProviderTests(unittest.TestCase):
         symbols = {item["symbol"] for item in results}
 
         self.assertIn("NIFTYBANK", symbols)
-
-    def test_symbol_search_includes_stooq_global_symbols(self):
-        results = app.search_symbols("aapl", limit=5)
-        symbols = {item["symbol"] for item in results}
-
-        self.assertIn("AAPL.US", symbols)
-
-    def test_brent_crude_aliases_use_stooq_cb_contract(self):
-        self.assertEqual(app.STOOQ_CROSS_ASSETS["Brent Crude"], "CB.F")
-        self.assertEqual(app.stooq_symbol_meta("BRENT")[0], "CB.F")
-        self.assertEqual(app.stooq_symbol_meta("BENT")[0], "CB.F")
-
-    def test_stooq_csv_quote_parser(self):
-        csv_text = (
-            "Symbol,Date,Time,Open,High,Low,Close,Volume,Change,%Change\n"
-            "AAPL.US,2026-04-30,19:19:21,270.425,273.76,268.14,272.36,13968659,3.36,1.25\n"
-        )
-
-        quote = app.stooq_quote_from_csv("AAPL.US", "AAPL.US", csv_text, name="Apple", currency_symbol="$", received_at=1000)
-
-        self.assertEqual(quote["price"], 272.36)
-        self.assertEqual(quote["change"], 3.36)
-        self.assertEqual(quote["pct"], 1.25)
-        self.assertEqual(quote["previous_close"], 269.0)
-        self.assertEqual(quote["source"], "Stooq")
-        self.assertEqual(quote["sym"], "$")
-        self.assertEqual(quote["fetchedAt"], 1000)
-
-    def test_stooq_quote_url_requests_change_fields(self):
-        url = app.stooq_quote_url("CB.F")
-
-        self.assertIn("c1p2", url)
-
-    def test_stooq_html_quote_parser_matches_visible_page_values(self):
-        html_text = """
-        <span id=aq_cb.f_c2|3>111.61</span>
-        <span id=aq_cb.f_d2>2026-05-01</span>
-        <span id=aq_cb.f_t1>10:54:09</span>
-        <span id=aq_cb.f_m2>-2.40</span>
-        <span id=aq_cb.f_m3>(-2.11%)</span>
-        <span id=aq_cb.f_h>112.43</span>
-        <span id=aq_cb.f_l>110.35</span>
-        <span id=aq_cb.f_o>111.47</span>
-        <span id=aq_cb.f_p>114.01</span>
-        """
-
-        quote = app.stooq_quote_from_html("Brent Crude", "CB.F", html_text, name="Brent", currency_symbol="$", received_at=1000)
-
-        self.assertEqual(quote["price"], 111.61)
-        self.assertEqual(quote["change"], -2.4)
-        self.assertEqual(quote["pct"], -2.11)
-        self.assertEqual(quote["previous_close"], 114.01)
-        self.assertEqual(quote["day_high"], 112.43)
-        self.assertEqual(quote["day_low"], 110.35)
-        self.assertEqual(quote["providerTimestamp"], "2026-05-01 10:54:09")
-        self.assertEqual(quote["source"], "Stooq")
-        self.assertEqual(quote["sourceDetail"], "Stooq page")
-
-    def test_stooq_html_quote_parser_handles_compact_header_values(self):
-        html_text = """
-        CRUDE OIL WTI (CL.F)
-        1 May, 10:56 105.52 +0.45 (+0.43%)
-        """
-
-        quote = app.stooq_quote_from_html("Crude Oil", "CL.F", html_text, name="WTI", currency_symbol="$", received_at=1000)
-
-        self.assertEqual(quote["price"], 105.52)
-        self.assertEqual(quote["change"], 0.45)
-        self.assertEqual(quote["pct"], 0.43)
-        self.assertEqual(quote["previous_close"], 105.07)
-        self.assertEqual(quote["providerTimestamp"], "1 May 10:56")
-        self.assertEqual(quote["source"], "Stooq")
-
-    def test_stooq_html_quote_parser_handles_global_stock_header_values(self):
-        html_text = "APPLE (AAPL.US) 30 Apr, 22:00 271.350 +1.180 (+0.44%)"
-
-        quote = app.stooq_quote_from_html("AAPL.US", "AAPL.US", html_text, name="Apple", currency_symbol="$", received_at=1000)
-
-        self.assertEqual(quote["price"], 271.35)
-        self.assertEqual(quote["change"], 1.18)
-        self.assertEqual(quote["pct"], 0.44)
-        self.assertEqual(quote["previous_close"], 270.17)
-
-    def test_cross_asset_quotes_request_brent_from_stooq(self):
-        expected = {
-            label: {"price": 100.0, "source": "Stooq", "stooqSymbol": symbol}
-            for label, symbol in app.STOOQ_CROSS_ASSETS.items()
-        }
-        with mock.patch.object(app, "fetch_stooq_quotes_by_label", return_value=expected) as stooq_mock:
-            with mock.patch.object(app, "_yahoo_price", side_effect=AssertionError("Yahoo should only be fallback")):
-                quotes = app.fetch_cross_asset_quotes()
-
-        self.assertEqual(quotes["Brent Crude"]["stooqSymbol"], "CB.F")
-        self.assertEqual(quotes["Crude Oil"]["source"], "Stooq")
-        self.assertEqual(quotes["USD/INR"]["source"], "Stooq")
-        stooq_mock.assert_called_once_with(dict(app.STOOQ_CROSS_ASSETS), prefer_page=True)
-
-    def test_cross_asset_quotes_use_yahoo_only_for_missing_stooq_quotes(self):
-        stooq_quotes = {
-            "Gold": {"price": 100.0, "source": "Stooq", "stooqSymbol": "GC.F"},
-            "Brent Crude": {"price": 111.2, "source": "Stooq", "stooqSymbol": "CB.F"},
-        }
-        with mock.patch.object(app, "fetch_stooq_quotes_by_label", return_value=stooq_quotes):
-            with mock.patch.object(app, "_yahoo_price", return_value=(94.9, 0.1, 0.11)) as yahoo_mock:
-                quotes = app.fetch_cross_asset_quotes()
-
-        self.assertEqual(quotes["Gold"]["source"], "Stooq")
-        self.assertEqual(quotes["Brent Crude"]["source"], "Stooq")
-        self.assertEqual(quotes["Crude Oil"]["source"], "Yahoo")
-        self.assertEqual(quotes["USD/INR"]["source"], "Yahoo")
-        yahoo_mock.assert_has_calls([mock.call("USDINR=X"), mock.call("CL=F")], any_order=True)
-
-    def test_stooq_quotes_fall_back_to_page_before_yahoo(self):
-        csv_response = mock.Mock()
-        csv_response.text = "Exceeded the daily hits limit"
-        csv_response.raise_for_status.return_value = None
-        page_response = mock.Mock()
-        page_response.text = """
-        <span id=aq_cb.f_c2|3>111.61</span>
-        <span id=aq_cb.f_d2>2026-05-01</span>
-        <span id=aq_cb.f_t1>10:54:09</span>
-        <span id=aq_cb.f_m2>-2.40</span>
-        <span id=aq_cb.f_m3>(-2.11%)</span>
-        <span id=aq_cb.f_h>112.43</span>
-        <span id=aq_cb.f_l>110.35</span>
-        <span id=aq_cb.f_o>111.47</span>
-        <span id=aq_cb.f_p>114.01</span>
-        """
-        page_response.raise_for_status.return_value = None
-        session = mock.Mock()
-        session.get.side_effect = [csv_response, page_response]
-
-        with mock.patch.object(app, "http_session", return_value=session):
-            quotes = app.fetch_stooq_quotes_by_label({"Brent Crude": "CB.F"})
-
-        self.assertEqual(quotes["Brent Crude"]["price"], 111.61)
-        self.assertEqual(quotes["Brent Crude"]["sourceDetail"], "Stooq page")
-        self.assertEqual(session.get.call_count, 2)
-
-    def test_stooq_backoff_serves_cached_quote_without_network(self):
-        quote = {
-            "symbol": "Brent Crude",
-            "price": 111.61,
-            "change": -2.4,
-            "pct": -2.11,
-            "fetchedAt": app.time.time() - 30,
-            "source": "Stooq",
-            "stooqSymbol": "CB.F",
-            "sym": "$",
-        }
-        app._stooq_quote_cache["Brent Crude|CB.F"] = (quote, app.time.time() - 30)
-        app._stooq_status["blockedUntil"] = app.time.time() + 60
-
-        session = mock.Mock()
-        with mock.patch.object(app, "http_session", return_value=session):
-            quotes = app.fetch_stooq_quotes_by_label({"Brent Crude": "CB.F"})
-
-        self.assertEqual(quotes["Brent Crude"]["price"], 111.61)
-        self.assertTrue(quotes["Brent Crude"]["stale"])
-        self.assertEqual(session.get.call_count, 0)
-
-    def test_stooq_symbol_uses_yahoo_fallback_when_stooq_misses(self):
-        with mock.patch.object(app, "fetch_stooq_quotes_by_label", return_value={}):
-            with mock.patch.object(app, "_fetch_nse_quote", side_effect=AssertionError("NSE should not be called")):
-                with mock.patch.object(app, "_yahoo_price", return_value=(271.35, 1.18, 0.44)) as yahoo_mock:
-                    quotes = app.refresh_quote_cache_for_symbols(["AAPL"])
-
-        self.assertEqual(quotes["AAPL"]["source"], "Yahoo")
-        self.assertEqual(quotes["AAPL"]["sourceDetail"], "Yahoo fallback after Stooq miss")
-        self.assertEqual(quotes["AAPL"]["yahooSymbol"], "AAPL")
-        yahoo_mock.assert_called_once_with("AAPL")
-
-    def test_yahoo_backoff_reuses_cached_quote_without_network(self):
-        app._yahoo_cache["AAPL"] = (271.35, 1.18, 0.44, app.time.time() - 500)
-        app._yahoo_status["blockedUntil"] = app.time.time() + 60
-
-        with mock.patch.object(app, "_yahoo_chart", side_effect=AssertionError("Yahoo network should not be called")):
-            quote = app._yahoo_price("AAPL")
-
-        self.assertEqual(quote, (271.35, 1.18, 0.44))
-
-    def test_global_symbols_use_stooq_before_upstox_or_nse(self):
-        expected = {
-            "^SPX": {
-                "price": 7184.2,
-                "change": 13.9,
-                "pct": 0.19,
-                "fetchedAt": 1000,
-                "source": "Stooq",
-                "sym": "",
-            }
-        }
-        with mock.patch.object(app, "fetch_stooq_quotes_by_label", return_value=expected) as stooq_mock:
-            with mock.patch.object(app, "_fetch_nse_quote", side_effect=AssertionError("NSE should not be called")):
-                quotes = app.refresh_quote_cache_for_symbols(["^SPX"])
-
-        self.assertEqual(quotes["^SPX"]["source"], "Stooq")
-        stooq_mock.assert_called_once_with({"^SPX": "^SPX"})
 
     def test_resolve_upstox_instrument_key_uses_search_for_new_symbols(self):
         app._upstox_instrument_search_cache.clear()
@@ -890,7 +676,7 @@ class AiChatTests(unittest.TestCase):
 
     def test_ai_chat_prompt_includes_internet_context(self):
         context = {
-            "tickerTape": {"Brent Crude": {"price": 88.2, "pct": 1.4, "source": "Stooq"}},
+            "tickerTape": {"Brent Crude": {"price": 88.2, "pct": 1.4, "source": "macro_context"}},
             "topicAiSummaries": [{"title": "Brent rises on supply risk", "summary": "AI summary says supply risk lifted oil."}],
             "internetNews": [{"title": "Brent rises on supply risk", "source": "Reuters"}],
         }
@@ -933,7 +719,7 @@ class AiChatTests(unittest.TestCase):
                 },
             ]
             app._ticks = {
-                "Brent Crude": {"price": 111.2, "change": -2.8, "pct": -2.45, "source": "Stooq", "fetchedAt": app.time.time()},
+                "Brent Crude": {"price": 111.2, "change": -2.8, "pct": -2.45, "source": "macro_context", "fetchedAt": app.time.time()},
             }
             app._price_history = {"Brent Crude": [112.0, 111.6, 111.2]}
 
@@ -974,7 +760,7 @@ class AiChatTests(unittest.TestCase):
                     app,
                     "build_ai_chat_context",
                     return_value={
-                        "tickerTape": {"Brent Crude": {"price": 88.2, "pct": 1.4, "source": "Stooq"}},
+                        "tickerTape": {"Brent Crude": {"price": 88.2, "pct": 1.4, "source": "macro_context"}},
                         "internetNews": [{"title": "Brent rises on supply risk", "source": "Reuters"}],
                     },
                 ):

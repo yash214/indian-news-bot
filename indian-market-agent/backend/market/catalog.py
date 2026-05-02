@@ -47,85 +47,6 @@ INDEX_SYMBOL_ALIASES = {
     "NIFTYOILGAS": {"name": "Nifty Oil & Gas", "sector": "Index", "instrumentKey": "NSE_INDEX|Nifty Oil & Gas"},
 }
 
-STOOQ_GLOBAL_SYMBOLS = {
-    "^SPX": {"name": "S&P 500", "sector": "Global Index", "stooqSymbol": "^SPX", "sym": ""},
-    "^NDQ": {"name": "Nasdaq 100", "sector": "Global Index", "stooqSymbol": "^NDQ", "sym": ""},
-    "^DJI": {"name": "Dow Jones Industrial Average", "sector": "Global Index", "stooqSymbol": "^DJI", "sym": ""},
-    "^RUT": {"name": "Russell 2000", "sector": "Global Index", "stooqSymbol": "^RUT", "sym": ""},
-    "^DAX": {"name": "DAX", "sector": "Global Index", "stooqSymbol": "^DAX", "sym": ""},
-    "^FTSE": {"name": "FTSE 100", "sector": "Global Index", "stooqSymbol": "^FTSE", "sym": ""},
-    "^NKX": {"name": "Nikkei 225", "sector": "Global Index", "stooqSymbol": "^NKX", "sym": ""},
-    "^HSI": {"name": "Hang Seng Index", "sector": "Global Index", "stooqSymbol": "^HSI", "sym": ""},
-    "AAPL.US": {"name": "Apple", "sector": "Global Stock", "stooqSymbol": "AAPL.US", "sym": "$"},
-    "MSFT.US": {"name": "Microsoft", "sector": "Global Stock", "stooqSymbol": "MSFT.US", "sym": "$"},
-    "NVDA.US": {"name": "Nvidia", "sector": "Global Stock", "stooqSymbol": "NVDA.US", "sym": "$"},
-    "AMZN.US": {"name": "Amazon", "sector": "Global Stock", "stooqSymbol": "AMZN.US", "sym": "$"},
-    "GOOGL.US": {"name": "Alphabet", "sector": "Global Stock", "stooqSymbol": "GOOGL.US", "sym": "$"},
-    "META.US": {"name": "Meta Platforms", "sector": "Global Stock", "stooqSymbol": "META.US", "sym": "$"},
-    "TSLA.US": {"name": "Tesla", "sector": "Global Stock", "stooqSymbol": "TSLA.US", "sym": "$"},
-    "JPM.US": {"name": "JPMorgan Chase", "sector": "Global Stock", "stooqSymbol": "JPM.US", "sym": "$"},
-    "XOM.US": {"name": "Exxon Mobil", "sector": "Global Stock", "stooqSymbol": "XOM.US", "sym": "$"},
-    "LLY.US": {"name": "Eli Lilly", "sector": "Global Stock", "stooqSymbol": "LLY.US", "sym": "$"},
-    "AVGO.US": {"name": "Broadcom", "sector": "Global Stock", "stooqSymbol": "AVGO.US", "sym": "$"},
-    "BRK.B.US": {"name": "Berkshire Hathaway B", "sector": "Global Stock", "stooqSymbol": "BRK.B.US", "sym": "$"},
-    "USDINR": {"name": "USD/INR", "sector": "Currency", "stooqSymbol": "USDINR", "sym": ""},
-    "CL.F": {"name": "WTI Crude Oil Futures", "sector": "Commodity", "stooqSymbol": "CL.F", "sym": "$"},
-    "CB.F": {"name": "Brent Crude Oil Futures", "sector": "Commodity", "stooqSymbol": "CB.F", "sym": "$"},
-    "GC.F": {"name": "Gold Futures", "sector": "Commodity", "stooqSymbol": "GC.F", "sym": "$"},
-}
-
-STOOQ_SYMBOL_ALIASES = {
-    "SPX": "^SPX",
-    "S&P500": "^SPX",
-    "S&P": "^SPX",
-    "NASDAQ": "^NDQ",
-    "NDX": "^NDQ",
-    "NAS100": "^NDQ",
-    "DOW": "^DJI",
-    "DJIA": "^DJI",
-    "RUSSELL2000": "^RUT",
-    "RUT": "^RUT",
-    "DAX": "^DAX",
-    "FTSE": "^FTSE",
-    "NIKKEI": "^NKX",
-    "NIKKEI225": "^NKX",
-    "HANGSENG": "^HSI",
-    "HSI": "^HSI",
-    "AAPL": "AAPL.US",
-    "MSFT": "MSFT.US",
-    "NVDA": "NVDA.US",
-    "AMZN": "AMZN.US",
-    "GOOGL": "GOOGL.US",
-    "GOOG": "GOOGL.US",
-    "META": "META.US",
-    "TSLA": "TSLA.US",
-    "JPM": "JPM.US",
-    "XOM": "XOM.US",
-    "LLY": "LLY.US",
-    "AVGO": "AVGO.US",
-    "BRK.B": "BRK.B.US",
-    "BRKB": "BRK.B.US",
-    "USD/INR": "USDINR",
-    "USDINR": "USDINR",
-    "CRUDE": "CL.F",
-    "CRUDEOIL": "CL.F",
-    "WTI": "CL.F",
-    "BRENT": "CB.F",
-    "BRENTCRUDE": "CB.F",
-    "BENT": "CB.F",
-    "BENTCRUDE": "CB.F",
-    "GOLD": "GC.F",
-    "XAU": "GC.F",
-}
-
-STOOQ_CROSS_ASSETS = {
-    "Gold": "GC.F",
-    "USD/INR": "USDINR",
-    "Crude Oil": "CL.F",
-    "Brent Crude": "CB.F",
-}
-
-
 def _dedupe_symbol_items(items: list[dict]) -> list[dict]:
     seen, out = set(), []
     for item in items:
@@ -141,10 +62,6 @@ SYMBOL_SUGGESTIONS = _dedupe_symbol_items([
     *[
         {"symbol": symbol, "name": meta["name"], "sector": meta["sector"], "instrumentKey": meta["instrumentKey"]}
         for symbol, meta in INDEX_SYMBOL_ALIASES.items()
-    ],
-    *[
-        {"symbol": symbol, "name": meta["name"], "sector": meta["sector"], "stooqSymbol": meta["stooqSymbol"]}
-        for symbol, meta in STOOQ_GLOBAL_SYMBOLS.items()
     ],
     {"symbol": "RELIANCE", "name": "Reliance Industries", "sector": "Energy"},
     {"symbol": "TCS", "name": "Tata Consultancy Services", "sector": "IT"},
@@ -254,13 +171,6 @@ SYMBOL_SUGGESTIONS = _dedupe_symbol_items([
     {"symbol": "ZYDUSLIFE", "name": "Zydus Lifesciences", "sector": "Pharma"},
 ])
 
-YAHOO_EXTRAS = {
-    "Gold": ("GC=F", "$"),
-    "USD/INR": ("USDINR=X", ""),
-    "Crude Oil": ("CL=F", "$"),
-    "Brent Crude": ("BZ=F", "$"),
-}
-
 ANALYTICS_INDEX_NAMES = {
     "NIFTY 50": "Nifty 50",
     "NIFTY BANK": "Nifty Bank",
@@ -280,13 +190,6 @@ ANALYTICS_INDEX_NAMES = {
 }
 
 PRIMARY_LEVEL_LABELS = ["Nifty 50", "Nifty Bank", "Nifty IT", "India VIX"]
-
-INDEX_HISTORY_SYMBOLS = {
-    "Nifty 50": ["^NSEI"],
-    "Nifty Bank": ["^NSEBANK", "^CNXBANK"],
-    "Nifty IT": ["^CNXIT"],
-    "India VIX": ["^INDIAVIX"],
-}
 
 SECTOR_TO_INDEX = {
     "IT": "Nifty IT",
