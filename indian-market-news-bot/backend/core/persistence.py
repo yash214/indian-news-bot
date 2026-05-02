@@ -260,7 +260,7 @@ def sanitize_symbols(value, limit: int = WATCHLIST_SYMBOL_LIMIT) -> list[str]:
 
     seen, out = set(), []
     for piece in pieces:
-        sym = re.sub(r"[^A-Z0-9&.-]", "", str(piece).upper().strip())
+        sym = re.sub(r"[^A-Z0-9&.^-]", "", str(piece).upper().strip())
         if sym and sym not in seen:
             seen.add(sym)
             out.append(sym)

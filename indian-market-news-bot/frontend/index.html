@@ -72,6 +72,7 @@
     <div class="tab-bar">
       <button class="tab-btn active" onclick="switchTab('analytics',this)">Analytics</button>
       <button class="tab-btn" onclick="switchTab('derivatives',this)">Derivatives</button>
+      <button class="tab-btn" onclick="switchTab('chat',this)">AI Chat</button>
       <button class="tab-btn" onclick="switchTab('watchlist',this)">Watchlist</button>
       <button class="tab-btn" onclick="switchTab('portfolio',this)">Portfolio</button>
     </div>
@@ -123,6 +124,31 @@
         <div class="panel-band">
           <div class="panel-title">Positioning Context</div>
           <div class="desk-list" id="deriv-context-list"></div>
+        </div>
+      </div>
+    </div>
+    <div id="tab-chat" class="tab-pane">
+      <div class="chat-shell">
+        <div class="chat-head">
+          <div class="chat-brand">
+            <div class="chat-brand-mark">AI</div>
+            <div>
+              <div class="chat-title">Market Chat</div>
+              <div class="chat-sub">Live dashboard + latest web context</div>
+            </div>
+          </div>
+          <button class="chat-clear" onclick="clearAiChat()">Clear</button>
+        </div>
+        <div class="chat-feed" id="ai-chat-feed"></div>
+        <div class="chat-compose">
+          <div class="chat-input-wrap">
+            <textarea id="ai-chat-input" rows="2" placeholder="Ask why Brent crude, gold, Bank Nifty, or a stock is moving..." onkeydown="handleAiChatKey(event)"></textarea>
+            <div class="chat-compose-footer">
+              <span>Live tape + AI summaries + web context</span>
+              <span>Enter to send</span>
+            </div>
+          </div>
+          <button id="ai-chat-send" onclick="sendAiChat()" aria-label="Ask AI">Ask</button>
         </div>
       </div>
     </div>

@@ -98,6 +98,14 @@ UPSTOX_USER_AGENT=curl/8.7.1
 AI_PROVIDER=bedrock
 BEDROCK_REGION=ap-south-1
 BEDROCK_MODEL_ID=qwen.qwen3-next-80b-a3b
+
+# Optional right-panel AI Chat terminal. This is separate from news summaries.
+# It sends live dashboard context plus fresh Google News RSS results to Bedrock.
+AI_CHAT_PROVIDER=bedrock-api-key
+BEDROCK_API_KEY=<your_bedrock_api_key>
+BEDROCK_OPENAI_BASE_URL=https://bedrock-mantle.ap-south-1.api.aws/v1
+BEDROCK_OPENAI_API=chat_completions
+AI_CHAT_MODEL=qwen.qwen3-next-80b-a3b-instruct
 ```
 
 6. Install the systemd service:

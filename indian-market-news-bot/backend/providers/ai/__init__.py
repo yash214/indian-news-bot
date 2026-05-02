@@ -35,6 +35,7 @@ def ai_model_name_from_env(provider_name: str | None = None) -> str:
     if provider_name == "bedrock-api-key":
         configured = (
             os.environ.get("BEDROCK_MANTLE_MODEL_ID")
+            or os.environ.get("AI_CHAT_MODEL")
             or os.environ.get("OPENAI_MODEL")
             or os.environ.get("BEDROCK_MODEL_ID")
             or BEDROCK_DEFAULT_MANTLE_MODEL_ID

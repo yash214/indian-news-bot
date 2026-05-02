@@ -20,6 +20,7 @@ def _bedrock_model_id() -> str:
 def _bedrock_mantle_model_id() -> str:
     configured = (
         os.environ.get("BEDROCK_MANTLE_MODEL_ID")
+        or os.environ.get("AI_CHAT_MODEL")
         or os.environ.get("OPENAI_MODEL")
         or os.environ.get("BEDROCK_MODEL_ID")
         or BEDROCK_DEFAULT_MANTLE_MODEL_ID

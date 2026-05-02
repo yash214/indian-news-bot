@@ -79,6 +79,9 @@ try:
         PRIMARY_LEVEL_LABELS,
         SECTOR_TO_INDEX,
         SYMBOL_SUGGESTIONS,
+        STOOQ_CROSS_ASSETS,
+        STOOQ_GLOBAL_SYMBOLS,
+        STOOQ_SYMBOL_ALIASES,
         UPSTOX_DEFAULT_INSTRUMENT_KEYS,
         UPSTOX_INDEX_INSTRUMENT_KEYS,
         UPSTOX_OPTION_UNDERLYINGS,
@@ -137,6 +140,12 @@ try:
         summary_needs_ai,
     )
     from backend.news.article_extract import article_text_is_useful, extract_article_text
+    from backend.providers.ai import (
+        AiProviderConfigurationError,
+        ai_model_name_from_env,
+        ai_provider_name_from_env,
+        create_ai_text_provider,
+    )
     from backend.providers.upstox.market_data import (
         option_underlying_key,
         parse_upstox_instrument_overrides,
@@ -148,6 +157,7 @@ try:
     )
     from backend.providers.upstox.v3_proto import decode_feed_response
     from backend.providers.upstox.live import build_stream_request, stream_authorize_url, stream_quote_from_feed
+    from backend.providers.stooq import stooq_page_url, stooq_quote_from_csv, stooq_quote_from_html, stooq_quote_url
     from backend.news.text import (
         build_article_preview,
         clean_headline,
@@ -204,6 +214,9 @@ except ModuleNotFoundError:
         PRIMARY_LEVEL_LABELS,
         SECTOR_TO_INDEX,
         SYMBOL_SUGGESTIONS,
+        STOOQ_CROSS_ASSETS,
+        STOOQ_GLOBAL_SYMBOLS,
+        STOOQ_SYMBOL_ALIASES,
         UPSTOX_DEFAULT_INSTRUMENT_KEYS,
         UPSTOX_INDEX_INSTRUMENT_KEYS,
         UPSTOX_OPTION_UNDERLYINGS,
@@ -262,6 +275,12 @@ except ModuleNotFoundError:
         summary_needs_ai,
     )
     from news.article_extract import article_text_is_useful, extract_article_text
+    from providers.ai import (
+        AiProviderConfigurationError,
+        ai_model_name_from_env,
+        ai_provider_name_from_env,
+        create_ai_text_provider,
+    )
     from providers.upstox.market_data import (
         option_underlying_key,
         parse_upstox_instrument_overrides,
@@ -273,6 +292,7 @@ except ModuleNotFoundError:
     )
     from providers.upstox.v3_proto import decode_feed_response
     from providers.upstox.live import build_stream_request, stream_authorize_url, stream_quote_from_feed
+    from providers.stooq import stooq_page_url, stooq_quote_from_csv, stooq_quote_from_html, stooq_quote_url
     from news.text import (
         build_article_preview,
         clean_headline,
@@ -308,21 +328,39 @@ INTRADAY_TICK_INTERVAL_SECONDS = 10
 AFTER_HOURS_TICK_INTERVAL_SECONDS = 60
 INTRADAY_TICK_STALE_SECONDS = 30
 AFTER_HOURS_TICK_STALE_SECONDS = 180
+STREAM_UI_BROADCAST_SECONDS = max(0.25, float(os.environ.get("STREAM_UI_BROADCAST_SECONDS", "1.0") or "1.0"))
+GLOBAL_QUOTE_REFRESH_SECONDS = max(2.0, float(os.environ.get("GLOBAL_QUOTE_REFRESH_SECONDS", "5.0") or "5.0"))
+YAHOO_INTRADAY_CHART_TTL = max(5.0, float(os.environ.get("YAHOO_INTRADAY_CHART_TTL", "20.0") or "20.0"))
+YAHOO_QUOTE_CACHE_TTL = max(30.0, float(os.environ.get("YAHOO_QUOTE_CACHE_TTL", "120.0") or "120.0"))
+YAHOO_BACKOFF_SECONDS = max(30.0, float(os.environ.get("YAHOO_BACKOFF_SECONDS", "180.0") or "180.0"))
+YAHOO_REQUEST_TIMEOUT_SECONDS = max(2.0, float(os.environ.get("YAHOO_REQUEST_TIMEOUT_SECONDS", "4.0") or "4.0"))
+STOOQ_QUOTE_CACHE_TTL = max(10.0, float(os.environ.get("STOOQ_QUOTE_CACHE_TTL", "20.0") or "20.0"))
+STOOQ_STALE_IF_ERROR_SECONDS = max(STOOQ_QUOTE_CACHE_TTL, float(os.environ.get("STOOQ_STALE_IF_ERROR_SECONDS", "300.0") or "300.0"))
+STOOQ_BACKOFF_SECONDS = max(15.0, float(os.environ.get("STOOQ_BACKOFF_SECONDS", "90.0") or "90.0"))
+STOOQ_REQUEST_TIMEOUT_SECONDS = max(2.0, float(os.environ.get("STOOQ_REQUEST_TIMEOUT_SECONDS", "4.0") or "4.0"))
 MIN_NEWS_STALE_SECONDS = 600
 LIVE_NSE_QUOTE_CACHE_TTL = 8.0
 CLOSED_NSE_QUOTE_CACHE_TTL = 45.0
 NSE_SESSION_REFRESH_SECONDS = 900
 MAX_QUOTE_WORKERS = 8
+STOOQ_MAX_WORKERS = max(1, min(MAX_QUOTE_WORKERS, int(os.environ.get("STOOQ_MAX_WORKERS", "2") or "2")))
 MAX_NEWS_WORKERS = 8
 NSE_PROVIDER_NAME = "nse"
 UPSTOX_PROVIDER_NAME = "upstox"
 UPSTOX_DEFAULT_API_BASE = "https://api.upstox.com/v2"
 UPSTOX_DEFAULT_V3_API_BASE = "https://api.upstox.com/v3"
 UPSTOX_QUOTE_BATCH_LIMIT = 500
+UPSTOX_INSTRUMENT_SEARCH_TTL = 86400.0
 UPSTOX_STREAM_MODE = "full"
 UPSTOX_STREAM_RECONNECT_SECONDS = 5
 UPSTOX_STREAM_OPEN_STALE_SECONDS = 12.0
 UPSTOX_STREAM_CLOSED_STALE_SECONDS = 180.0
+AI_CHAT_MAX_HISTORY = max(0, int(os.environ.get("AI_CHAT_MAX_HISTORY", "8") or "8"))
+AI_CHAT_MAX_CONTEXT_ARTICLES = max(1, int(os.environ.get("AI_CHAT_MAX_CONTEXT_ARTICLES", "10") or "10"))
+AI_CHAT_MAX_WEB_RESULTS = max(0, int(os.environ.get("AI_CHAT_MAX_WEB_RESULTS", "6") or "6"))
+AI_CHAT_WEB_CACHE_TTL = max(30.0, float(os.environ.get("AI_CHAT_WEB_CACHE_TTL", "180") or "180"))
+AI_CHAT_CONTEXT_CHAR_LIMIT = max(4000, int(os.environ.get("AI_CHAT_CONTEXT_CHAR_LIMIT", "14000") or "14000"))
+AI_CHAT_MAX_TOKENS = max(200, int(os.environ.get("AI_CHAT_MAX_TOKENS", "750") or "750"))
 RUNTIME_NEWS_STATE_KEY = "runtime_news_payload"
 RUNTIME_SNAPSHOT_STATE_KEY = "runtime_market_snapshot"
 
@@ -360,6 +398,13 @@ NSE_HEADERS = {
     "Accept-Language":  "en-IN,en;q=0.9",
     "Referer":          "https://www.nseindia.com/",
     "X-Requested-With": "XMLHttpRequest",
+}
+STOOQ_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                  "AppleWebKit/537.36 Chrome/124 Safari/537.36",
+    "Accept": "text/html,text/csv,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Referer": "https://stooq.com/",
 }
 
 _sess = requests.Session()
@@ -400,20 +445,37 @@ _last_news_refresh_ts: float | None = None
 _last_tick_refresh_ts: float | None = None
 _last_analytics_refresh_ts: float | None = None
 _last_derivatives_refresh_ts: float | None = None
+_last_fast_stream_broadcast_ts = 0.0
 
 _yahoo_cache: dict[str, tuple[float, float, float, float]] = {}
-# Commodity/FX extras do not need sub-minute polling. A longer TTL keeps the
-# dashboard responsive while avoiding aggressive rate limits from Yahoo.
-_yahoo_cache_ttl = 300.0
+_yahoo_cache_ttl = YAHOO_QUOTE_CACHE_TTL
 _nse_quote_cache: dict[str, tuple[dict, float]] = {}
 _upstox_quote_cache: dict[str, tuple[dict, float]] = {}
+_stooq_quote_cache: dict[str, tuple[dict, float]] = {}
 _ai_summary_service: NewsAiSummaryService | None = None
+_ai_chat_web_cache: dict[str, tuple[list[dict], float]] = {}
 _upstox_stream_quote_cache: dict[str, tuple[dict, float]] = {}
+_upstox_instrument_search_cache: dict[str, tuple[list[dict], float]] = {}
 _upstox_rest_status = {
     "lastError": None,
     "lastErrorAt": None,
     "lastOkAt": None,
     "failedKeys": [],
+}
+_stooq_status = {
+    "lastError": None,
+    "lastErrorAt": None,
+    "lastOkAt": None,
+    "lastLatencyMs": None,
+    "failedSymbols": [],
+    "blockedUntil": None,
+}
+_yahoo_status = {
+    "lastError": None,
+    "lastErrorAt": None,
+    "lastOkAt": None,
+    "failedSymbols": [],
+    "blockedUntil": None,
 }
 _upstox_curl_preferred_until = 0.0
 _chart_cache: dict[tuple[str, str, str], tuple[dict, float]] = {}
@@ -544,6 +606,8 @@ def market_data_provider_status() -> dict:
     active = active_market_data_provider()
     stream = upstox_stream_runtime_status()
     rest = upstox_rest_runtime_status()
+    stooq = stooq_runtime_status()
+    yahoo = yahoo_runtime_status()
     token_source = upstox_token_source()
     degraded = requested == UPSTOX_PROVIDER_NAME and configured and bool(rest.get("lastError")) and not stream["connected"]
     return {
@@ -558,6 +622,8 @@ def market_data_provider_status() -> dict:
         "streamDependencyReady": stream["dependencyReady"],
         "degraded": degraded,
         "rest": rest,
+        "stooq": stooq,
+        "yahoo": yahoo,
         "reason": (
             "Upstox analytics token missing; using NSE fallback"
             if requested == UPSTOX_PROVIDER_NAME and not configured
@@ -627,6 +693,129 @@ def upstox_rest_runtime_status() -> dict:
 def _set_upstox_rest_status(**patch) -> None:
     with _lock:
         _upstox_rest_status.update(patch)
+
+
+def _short_error(exc: Exception | str, limit: int = 180) -> str:
+    return str(exc).replace("\n", " ").strip()[:limit]
+
+
+def stooq_runtime_status() -> dict:
+    now = time.time()
+    with _lock:
+        status = dict(_stooq_status)
+    blocked_until = status.get("blockedUntil") or 0.0
+    last_ok_at = status.get("lastOkAt")
+    last_error_at = status.get("lastErrorAt")
+    status["backoffActive"] = bool(blocked_until and blocked_until > now)
+    status["retryInSeconds"] = round(max(blocked_until - now, 0.0), 1) if blocked_until else 0.0
+    status["lastOkAgeSeconds"] = round(now - last_ok_at, 1) if last_ok_at else None
+    status["lastErrorAgeSeconds"] = round(now - last_error_at, 1) if last_error_at else None
+    if last_ok_at:
+        status["lastOkAt"] = datetime.fromtimestamp(last_ok_at, IST).isoformat()
+    if last_error_at:
+        status["lastErrorAt"] = datetime.fromtimestamp(last_error_at, IST).isoformat()
+    if blocked_until:
+        status["blockedUntil"] = datetime.fromtimestamp(blocked_until, IST).isoformat()
+    return status
+
+
+def stooq_backoff_active() -> bool:
+    with _lock:
+        blocked_until = float(_stooq_status.get("blockedUntil") or 0.0)
+    return blocked_until > time.time()
+
+
+def _record_stooq_ok(label: str, symbol: str, latency_ms: float | None = None) -> None:
+    now = time.time()
+    with _lock:
+        failed = [item for item in _stooq_status.get("failedSymbols", []) if item != symbol]
+        _stooq_status.update({
+            "lastError": None,
+            "lastErrorAt": None,
+            "lastOkAt": now,
+            "lastLatencyMs": round(latency_ms, 1) if latency_ms is not None else None,
+            "failedSymbols": failed,
+            "blockedUntil": None,
+        })
+
+
+def _record_stooq_error(label: str, symbol: str, exc: Exception | str) -> None:
+    now = time.time()
+    message = _short_error(exc)
+    with _lock:
+        failed = [item for item in _stooq_status.get("failedSymbols", []) if item != symbol]
+        failed.insert(0, symbol)
+        _stooq_status.update({
+            "lastError": f"{label}: {message}",
+            "lastErrorAt": now,
+            "failedSymbols": failed[:10],
+            "blockedUntil": now + STOOQ_BACKOFF_SECONDS,
+        })
+    print(f"[!] Stooq {label} ({symbol}): {message}; backing off {int(STOOQ_BACKOFF_SECONDS)}s")
+
+
+def _stale_provider_quote(quote: dict, reason: Exception | str | None = None) -> dict:
+    stale = dict(quote)
+    stale["stale"] = True
+    stale["live"] = False
+    stale["sourceDetail"] = "Stooq cached while provider is retrying"
+    if reason:
+        stale["providerError"] = _short_error(reason)
+    return stale
+
+
+def yahoo_runtime_status() -> dict:
+    now = time.time()
+    with _lock:
+        status = dict(_yahoo_status)
+    blocked_until = status.get("blockedUntil") or 0.0
+    last_ok_at = status.get("lastOkAt")
+    last_error_at = status.get("lastErrorAt")
+    status["backoffActive"] = bool(blocked_until and blocked_until > now)
+    status["retryInSeconds"] = round(max(blocked_until - now, 0.0), 1) if blocked_until else 0.0
+    status["lastOkAgeSeconds"] = round(now - last_ok_at, 1) if last_ok_at else None
+    status["lastErrorAgeSeconds"] = round(now - last_error_at, 1) if last_error_at else None
+    if last_ok_at:
+        status["lastOkAt"] = datetime.fromtimestamp(last_ok_at, IST).isoformat()
+    if last_error_at:
+        status["lastErrorAt"] = datetime.fromtimestamp(last_error_at, IST).isoformat()
+    if blocked_until:
+        status["blockedUntil"] = datetime.fromtimestamp(blocked_until, IST).isoformat()
+    return status
+
+
+def yahoo_backoff_active() -> bool:
+    with _lock:
+        blocked_until = float(_yahoo_status.get("blockedUntil") or 0.0)
+    return blocked_until > time.time()
+
+
+def _record_yahoo_ok(symbol: str) -> None:
+    now = time.time()
+    with _lock:
+        failed = [item for item in _yahoo_status.get("failedSymbols", []) if item != symbol]
+        _yahoo_status.update({
+            "lastError": None,
+            "lastErrorAt": None,
+            "lastOkAt": now,
+            "failedSymbols": failed,
+            "blockedUntil": None,
+        })
+
+
+def _record_yahoo_error(symbol: str, exc: Exception | str) -> None:
+    now = time.time()
+    message = _short_error(exc)
+    with _lock:
+        failed = [item for item in _yahoo_status.get("failedSymbols", []) if item != symbol]
+        failed.insert(0, symbol)
+        _yahoo_status.update({
+            "lastError": f"{symbol}: {message}",
+            "lastErrorAt": now,
+            "failedSymbols": failed[:10],
+            "blockedUntil": now + YAHOO_BACKOFF_SECONDS,
+        })
+    print(f"[!] Yahoo {symbol}: {message}; backing off {int(YAHOO_BACKOFF_SECONDS)}s")
 
 
 def upstox_stream_dependencies_ready() -> bool:
@@ -869,8 +1058,9 @@ def update_app_state(payload: dict | None) -> dict:
     persist_app_state(merged)
     _upstox_stream_wakeup.set()
     try:
-        refresh_tracked_symbol_quotes(merged)
         rebuild_computed_payloads()
+        persist_runtime_snapshot_payload()
+        broadcast_market_snapshot()
     except Exception:
         pass
     return get_app_state_copy()
@@ -880,22 +1070,27 @@ def format_quote_for_client(sym: str, quote: dict, status: dict | None = None) -
     status = status or get_market_status()
     entry = symbol_directory_entry(sym)
     age = quote_age_seconds(quote)
-    stale_after = nse_quote_cache_ttl(status) * 2
+    stale_after = (stooq_quote_cache_ttl() * 2) if quote.get("stooqSymbol") or quote.get("source") == "Stooq" else nse_quote_cache_ttl(status) * 2
+    stale = bool(quote.get("stale")) or age is None or age > stale_after
     name = (entry or {}).get("name") or quote.get("name") or sym
-    return {
+    payload = {
         "symbol": sym,
         "label": sym,
         "name": name,
         "price": quote["price"],
         "change": quote["change"],
         "pct": quote["pct"],
-        "live": True,
-        "sym": "Rs",
+        "live": quote.get("source") != "Yahoo" and not stale,
+        "sym": quote.get("sym", "Rs"),
         "fetchedAt": quote.get("fetchedAt"),
         "ageSeconds": age,
-        "stale": age is None or age > stale_after,
+        "stale": stale,
         "source": quote.get("source", "NSE"),
     }
+    for key in ["previous_close", "open", "day_high", "day_low", "providerTimestamp", "stooqSymbol", "sourceDetail", "yahooSymbol"]:
+        if quote.get(key) is not None:
+            payload[key] = quote.get(key)
+    return payload
 
 
 def format_quotes_for_client(quotes: dict[str, dict], status: dict | None = None) -> dict[str, dict]:
@@ -906,17 +1101,19 @@ def format_quotes_for_client(quotes: dict[str, dict], status: dict | None = None
 def refresh_quote_cache_for_symbols(symbols: list[str]) -> dict[str, dict]:
     clean_symbols = []
     for sym in symbols:
-        normalized = re.sub(r"[^A-Z0-9&.-]", "", (sym or "").upper())
+        normalized = _clean_general_symbol(sym)
         if normalized and normalized not in clean_symbols:
             clean_symbols.append(normalized)
     if not clean_symbols:
         return {}
 
+    stooq_preferred = {sym for sym in clean_symbols if stooq_symbol_meta(sym)}
     if active_market_data_provider() == UPSTOX_PROVIDER_NAME:
         label_to_key = {
             sym: key
             for sym in clean_symbols
-            if (key := upstox_instrument_key_for_symbol(sym))
+            if sym not in stooq_preferred
+            if (key := resolve_upstox_instrument_key(sym))
         }
         try:
             quotes = fetch_upstox_quotes_by_label(label_to_key) if label_to_key else {}
@@ -930,6 +1127,14 @@ def refresh_quote_cache_for_symbols(symbols: list[str]) -> dict[str, dict]:
         quotes = {}
         pending_symbols = list(clean_symbols)
 
+    stooq_first = {sym: sym for sym in pending_symbols if sym in stooq_preferred}
+    if stooq_first:
+        quotes.update(fetch_stooq_quotes_by_label(stooq_first))
+        stooq_missing = [sym for sym in stooq_first if sym not in quotes]
+        if stooq_missing:
+            quotes.update(fetch_yahoo_fallback_quotes_for_symbols(stooq_missing, detail="Yahoo fallback after Stooq miss"))
+    pending_symbols = [sym for sym in pending_symbols if sym not in quotes and sym not in stooq_first]
+
     def nse_worker(sym: str) -> tuple[str, dict | None]:
         try:
             return sym, _fetch_nse_quote(sym)
@@ -942,6 +1147,12 @@ def refresh_quote_cache_for_symbols(symbols: list[str]) -> dict[str, dict]:
             sym, quote = future.result()
             if quote:
                 quotes[sym] = quote
+    stooq_late = {sym: sym for sym in clean_symbols if sym not in quotes and stooq_symbol_meta(sym)}
+    if stooq_late:
+        quotes.update(fetch_stooq_quotes_by_label(stooq_late))
+        stooq_late_missing = [sym for sym in stooq_late if sym not in quotes]
+        if stooq_late_missing:
+            quotes.update(fetch_yahoo_fallback_quotes_for_symbols(stooq_late_missing, detail="Yahoo fallback after Stooq miss"))
     return quotes
 
 
@@ -1056,6 +1267,7 @@ def start_background_workers() -> bool:
         threading.Thread(target=refresh_loop, daemon=True, name="market-desk-refresh").start()
         threading.Thread(target=ticker_loop, daemon=True, name="market-desk-ticker").start()
         threading.Thread(target=upstox_stream_loop, daemon=True, name="market-desk-upstox-v3").start()
+        threading.Thread(target=global_quote_loop, daemon=True, name="market-desk-global-quotes").start()
         _background_threads_started = True
         return True
 
@@ -1096,6 +1308,361 @@ def runtime_snapshot_from_db(include_history: bool = False) -> dict | None:
         payload = dict(payload)
         payload.pop("history", None)
     return payload
+
+
+# ── AI market chat helpers ─────────────────────────────────────────────────
+def ai_chat_provider_name() -> str:
+    configured = os.environ.get("AI_CHAT_PROVIDER", "").strip().lower().replace("-", "_")
+    aliases = {
+        "ollama": "ollama",
+        "local": "ollama",
+        "bedrock": "bedrock",
+        "bedrock_api_key": "bedrock-api-key",
+        "bedrock_responses": "bedrock-api-key",
+        "bedrock_openai": "bedrock-api-key",
+    }
+    if configured:
+        return aliases.get(configured, configured)
+    if os.environ.get("BEDROCK_API_KEY", "").strip():
+        return "bedrock-api-key"
+    if os.environ.get("AWS_ACCESS_KEY_ID", "").strip() or os.environ.get("AWS_PROFILE", "").strip():
+        return "bedrock"
+    return ai_provider_name_from_env()
+
+
+def _trim_text(value, limit: int = 420) -> str:
+    text = re.sub(r"\s+", " ", str(value or "")).strip()
+    if len(text) <= limit:
+        return text
+    return text[:limit].rstrip() + "..."
+
+
+def _compact_chat_history(history) -> list[dict]:
+    if not isinstance(history, list):
+        return []
+    out = []
+    for item in history[-AI_CHAT_MAX_HISTORY:]:
+        if not isinstance(item, dict):
+            continue
+        role = str(item.get("role") or "").lower()
+        if role not in {"user", "assistant"}:
+            continue
+        content = _trim_text(item.get("content"), 900)
+        if content:
+            out.append({"role": role, "content": content})
+    return out
+
+
+def _price_momentum_for_chat(history: list | tuple | None) -> dict | None:
+    if not history:
+        return None
+    values = []
+    for item in list(history)[-10:]:
+        try:
+            values.append(round(float(item), 4))
+        except Exception:
+            continue
+    if not values:
+        return None
+    start = values[0]
+    latest = values[-1]
+    change = round(latest - start, 4)
+    pct = round((change / start * 100) if start else 0.0, 3)
+    return {
+        "samples": values,
+        "sampleCount": len(values),
+        "trailChange": change,
+        "trailPct": pct,
+    }
+
+
+def _compact_quote_for_chat(label: str, quote: dict | None, history: list | tuple | None = None) -> dict | None:
+    if not quote:
+        return None
+    price = quote.get("price")
+    compact = {
+        "label": label,
+        "price": round_or_none(price),
+        "previousClose": round_or_none(quote.get("previous_close")),
+        "open": round_or_none(quote.get("open")),
+        "dayHigh": round_or_none(quote.get("day_high")),
+        "dayLow": round_or_none(quote.get("day_low")),
+        "change": round_or_none(quote.get("change")),
+        "pct": round_or_none(quote.get("pct")),
+        "source": quote.get("source") or "market feed",
+        "providerTimestamp": quote.get("providerTimestamp"),
+        "stooqSymbol": quote.get("stooqSymbol"),
+        "ageSeconds": quote_age_seconds(quote),
+        "currencySymbol": quote.get("sym", ""),
+    }
+    momentum = _price_momentum_for_chat(history)
+    if momentum:
+        compact["recentMomentum"] = momentum
+    return compact
+
+
+def _chat_query_terms(question: str) -> set[str]:
+    aliases = {
+        "bent": "brent",
+        "xau": "gold",
+        "rupee": "inr",
+        "dollar": "usd",
+        "oil": "crude",
+    }
+    terms = set()
+    for term in re.findall(r"[a-zA-Z0-9/.-]{2,}", str(question or "").lower()):
+        clean = term.strip("./-")
+        if clean in {"what", "why", "does", "with", "from", "this", "that", "today", "market", "move", "moving"}:
+            continue
+        terms.add(aliases.get(clean, clean))
+    if "usd/inr" in str(question or "").lower():
+        terms.update({"usd", "inr"})
+    return terms
+
+
+def _article_relevance_score(article: dict, query_terms: set[str]) -> tuple[int, float]:
+    ai_analysis = article.get("aiAnalysis") if isinstance(article.get("aiAnalysis"), dict) else {}
+    ai_reasons = " ".join(ai_analysis.get("reasons") or [])
+    index_impact = json.dumps(ai_analysis.get("indexImpact") or {}, ensure_ascii=False)
+    text = f"{article.get('title', '')} {article.get('summary', '')} {article.get('sector', '')} {ai_reasons} {index_impact}".lower()
+    term_hits = sum(1 for term in query_terms if term and term in text)
+    if "brent" in query_terms and ("brent" in text or "crude" in text or "oil" in text):
+        term_hits += 2
+    impact_score = int(article.get("impact") or 0)
+    return (term_hits * 10 + impact_score, float(article.get("ts") or 0))
+
+
+def _articles_for_ai_chat() -> list[dict]:
+    if external_worker_mode():
+        runtime_payload = runtime_news_payload_from_db() or {}
+        raw_articles = runtime_payload.get("articles") if isinstance(runtime_payload.get("articles"), list) else []
+    else:
+        with _lock:
+            raw_articles = list(_arts)
+    return raw_articles
+
+
+def _article_ai_context(article: dict, *, summary_limit: int = 700) -> dict:
+    sentiment_payload = article.get("sentiment") if isinstance(article.get("sentiment"), dict) else {}
+    impact_meta = article.get("impactMeta") if isinstance(article.get("impactMeta"), dict) else {}
+    ai_meta = article.get("aiAnalysis") if isinstance(article.get("aiAnalysis"), dict) else {}
+    impact_ai = impact_meta.get("ai") if isinstance(impact_meta.get("ai"), dict) else {}
+    reasons = ai_meta.get("reasons") or impact_meta.get("reasons") or []
+    return {
+        "title": _trim_text(article.get("title"), 180),
+        "source": article.get("source"),
+        "published": article.get("published"),
+        "sector": article.get("sector"),
+        "scope": article.get("scope"),
+        "impact": article.get("impact"),
+        "sentiment": sentiment_payload.get("label") or article.get("sentiment"),
+        "summary": _trim_text(article.get("summary"), summary_limit),
+        "summarySource": article.get("summarySource") or "feed",
+        "analysisSource": article.get("analysisSource") or "",
+        "indexImpact": ai_meta.get("indexImpact") or impact_ai.get("indexImpact") or {},
+        "reasons": reasons[:5] if isinstance(reasons, list) else [],
+        "textSource": ai_meta.get("textSource") or impact_ai.get("textSource") or "",
+        "inputChars": ai_meta.get("inputChars") or impact_ai.get("inputChars") or 0,
+    }
+
+
+def _topic_ai_summaries_for_ai_chat(question: str, limit: int = 8) -> list[dict]:
+    query_terms = _chat_query_terms(question)
+    candidates = []
+    for article in _articles_for_ai_chat():
+        if article.get("summarySource") != "ai" or not str(article.get("summary") or "").strip():
+            continue
+        score = _article_relevance_score(article, query_terms)
+        if score[0] <= 0 and query_terms:
+            continue
+        candidates.append((score, article))
+    candidates.sort(key=lambda item: item[0], reverse=True)
+    return [_article_ai_context(article, summary_limit=760) for _score, article in candidates[:limit]]
+
+
+def _recent_articles_for_ai_chat(question: str, limit: int = AI_CHAT_MAX_CONTEXT_ARTICLES) -> list[dict]:
+    raw_articles = _articles_for_ai_chat()
+    query_terms = _chat_query_terms(question)
+    scored = sorted(
+        raw_articles,
+        key=lambda article: _article_relevance_score(article, query_terms),
+        reverse=True,
+    )
+    return [_article_ai_context(article, summary_limit=520) for article in scored[:limit]]
+
+
+def _ai_chat_web_query(question: str) -> str:
+    text = str(question or "").strip()
+    lower = text.lower().replace("bent", "brent")
+    if "brent" in lower or "crude" in lower or "oil" in lower:
+        return "Brent crude oil prices why up today OPEC inventory demand geopolitics"
+    if "usd" in lower or "inr" in lower or "rupee" in lower:
+        return "USD INR rupee why moving today RBI dollar oil yields"
+    if "nifty bank" in lower or "bank nifty" in lower:
+        return "Bank Nifty why moving today Indian banks RBI stocks"
+    if "nifty" in lower or "sensex" in lower:
+        return "Nifty Sensex why moving today Indian stock market"
+    return f"{text} market news finance today"
+
+
+def _internet_results_for_ai_chat(question: str) -> list[dict]:
+    if AI_CHAT_MAX_WEB_RESULTS <= 0:
+        return []
+    query = _ai_chat_web_query(question)
+    cache_key = query.lower()
+    now = time.time()
+    cached = _ai_chat_web_cache.get(cache_key)
+    if cached and now - cached[1] < AI_CHAT_WEB_CACHE_TTL:
+        return list(cached[0])
+
+    results: list[dict] = []
+    seen_links: set[str] = set()
+    for scope in [GLOBAL_SCOPE, LOCAL_SCOPE]:
+        if len(results) >= AI_CHAT_MAX_WEB_RESULTS:
+            break
+        try:
+            data = _get_feed(google_news_search_rss(query, scope))
+            feed = feedparser.parse(data)
+        except Exception as exc:
+            if upstox_debug_enabled():
+                print(f"[!] AI chat web context ({scope}): {exc}")
+            continue
+        for entry in feed.entries[:AI_CHAT_MAX_WEB_RESULTS * 2]:
+            link = str(entry.get("link") or "").strip()
+            if link and link in seen_links:
+                continue
+            seen_links.add(link)
+            source_meta = entry.get("source") or {}
+            publisher = strip_html(source_meta.get("title", "")) if hasattr(source_meta, "get") else ""
+            title = strip_html(entry.get("title", "")).strip()
+            summary = clean_summary(strip_html(entry.get("summary", entry.get("description", ""))))
+            if not title:
+                continue
+            try:
+                pp = entry.get("published_parsed") or entry.get("updated_parsed")
+                published_dt = datetime(*pp[:6], tzinfo=timezone.utc).astimezone(IST) if pp else None
+            except Exception:
+                published_dt = None
+            results.append({
+                "title": _trim_text(title, 220),
+                "source": publisher or feed_publisher_label("Google News"),
+                "scope": scope,
+                "published": published_dt.isoformat() if published_dt else None,
+                "summary": _trim_text(summary, 480),
+                "link": link,
+            })
+            if len(results) >= AI_CHAT_MAX_WEB_RESULTS:
+                break
+    _ai_chat_web_cache[cache_key] = (list(results), now)
+    return results
+
+
+def build_ai_chat_context(question: str) -> dict:
+    snapshot = None
+    if external_worker_mode():
+        snapshot = runtime_snapshot_from_db(include_history=True)
+    snapshot = snapshot if isinstance(snapshot, dict) else market_data_snapshot(include_history=True)
+    analytics = snapshot.get("analytics") if isinstance(snapshot.get("analytics"), dict) else {}
+    derivatives = snapshot.get("derivatives") if isinstance(snapshot.get("derivatives"), dict) else {}
+    ticks = snapshot.get("ticks") if isinstance(snapshot.get("ticks"), dict) else {}
+    tracked_quotes = snapshot.get("trackedQuotes") if isinstance(snapshot.get("trackedQuotes"), dict) else {}
+    history_map = snapshot.get("history") if isinstance(snapshot.get("history"), dict) else {}
+    status = snapshot.get("marketStatus") if isinstance(snapshot.get("marketStatus"), dict) else get_market_status()
+    provider = snapshot.get("dataProvider") if isinstance(snapshot.get("dataProvider"), dict) else market_data_provider_status()
+
+    return {
+        "asOf": ist_now().isoformat(),
+        "marketStatus": {
+            "session": status.get("session"),
+            "label": status.get("sessionLabel"),
+            "reason": status.get("reason"),
+            "tickerAgeSeconds": status.get("tickerAgeSeconds"),
+            "newsAgeSeconds": status.get("newsAgeSeconds"),
+            "staleData": status.get("staleData"),
+        },
+        "dataProvider": {
+            "active": provider.get("active"),
+            "requested": provider.get("requested"),
+            "reason": provider.get("reason"),
+            "streamConnected": provider.get("streamConnected"),
+            "degraded": provider.get("degraded"),
+        },
+        "tickerTape": {
+            label: compact
+            for label, quote in ticks.items()
+            if (compact := _compact_quote_for_chat(label, quote, history_map.get(label)))
+        },
+        "trackedQuotes": {
+            label: compact
+            for label, quote in tracked_quotes.items()
+            if (compact := _compact_quote_for_chat(label, quote, history_map.get(label)))
+        },
+        "analytics": {
+            "overviewCards": analytics.get("overviewCards", [])[:7],
+            "alerts": analytics.get("alerts", [])[:5],
+            "sectorBoard": analytics.get("sectorBoard", [])[:8],
+            "keyLevels": analytics.get("keyLevels", [])[:6],
+        },
+        "derivatives": {
+            "predictionCards": derivatives.get("predictionCards", [])[:6],
+            "riskFlags": derivatives.get("riskFlags", [])[:6],
+            "contextNotes": derivatives.get("contextNotes", [])[:6],
+            "crossAssetRows": derivatives.get("crossAssetRows", [])[:6],
+            "relativeValueRows": derivatives.get("relativeValueRows", [])[:6],
+        },
+        "topicAiSummaries": _topic_ai_summaries_for_ai_chat(question),
+        "recentNews": _recent_articles_for_ai_chat(question),
+        "internetNews": _internet_results_for_ai_chat(question),
+    }
+
+
+def build_ai_chat_prompt(question: str, history, context: dict) -> str:
+    compact_history = _compact_chat_history(history)
+    context_json = json.dumps(context, ensure_ascii=False, sort_keys=True)
+    if len(context_json) > AI_CHAT_CONTEXT_CHAR_LIMIT:
+        context_json = context_json[:AI_CHAT_CONTEXT_CHAR_LIMIT].rstrip() + "...<truncated>"
+    history_text = "\n".join(f"{item['role']}: {item['content']}" for item in compact_history) or "No previous chat."
+    return f"""You are StockTerminal's AI Market Chat for an intraday Indian-market dashboard.
+
+Rules:
+- Use only the supplied dashboard context and recent news. If the context is not enough, say exactly what is missing.
+- Treat internetNews as fresh web/news evidence fetched by the app at request time. Mention source names when those items drive the answer.
+- Treat topicAiSummaries as pre-analyzed article evidence selected for the user's topic. Use them before generic recentNews, but decide whether they actually explain the move.
+- If the user writes "bent crude", interpret it as "Brent crude".
+- Explain market moves by combining live price change, recentMomentum, source/age of quote, topicAiSummaries, fresh internetNews, macro/sector context, and uncertainty.
+- If the evidence is weak or unrelated, say that clearly and give the most likely drivers to verify next.
+- Keep the answer concise but useful: start with a one-sentence direct answer, then 3-5 evidence bullets, then one "Watch next" line.
+- Do not use markdown headings like ###. Use plain labels if a section label helps.
+- Do not invent facts, prices, sources, or breaking news.
+- Do not place trades or promise outcomes. You can describe bias, risk, and what to watch next.
+
+Recent chat:
+{history_text}
+
+User question:
+{question}
+
+Live dashboard context JSON:
+{context_json}
+"""
+
+
+def generate_ai_chat_response(question: str, history) -> tuple[str, str, str]:
+    provider_name = ai_chat_provider_name()
+    provider = create_ai_text_provider(http_session_factory=http_session, provider_name=provider_name)
+    if not provider.is_configured():
+        raise AiProviderConfigurationError(
+            "AI chat is not configured. Set BEDROCK_API_KEY for Bedrock API-key chat, or configure AWS credentials for Bedrock Runtime."
+        )
+    context = build_ai_chat_context(question)
+    prompt = build_ai_chat_prompt(question, history, context)
+    answer = provider.generate_text(
+        prompt=prompt,
+        temperature=0.2,
+        max_tokens=AI_CHAT_MAX_TOKENS,
+        json_mode=False,
+    )
+    return answer.strip(), provider_name, ai_model_name_from_env(provider_name)
 
 
 # ── Network helpers ────────────────────────────────────────────────────────
@@ -1247,14 +1814,16 @@ def _is_missing_number(value) -> bool:
     return value is None or value != value
 
 
-def _yahoo_chart(sym: str, range_: str = "6mo", interval: str = "1d") -> dict:
+def _yahoo_chart(sym: str, range_: str = "6mo", interval: str = "1d", *, allow_yfinance: bool = True) -> dict:
     now = time.time()
     key = (sym, range_, interval)
+    cache_ttl = YAHOO_INTRADAY_CHART_TTL if interval.endswith("m") else _chart_cache_ttl
     cached = _chart_cache.get(key)
-    if cached and (now - cached[1] < _chart_cache_ttl):
+    if cached and (now - cached[1] < cache_ttl):
         return cached[0]
 
-    if yf is not None:
+    use_direct_yahoo = interval.endswith("m") or not allow_yfinance
+    if yf is not None and not use_direct_yahoo:
         try:
             ticker = yf.Ticker(sym)
             hist = ticker.history(period=range_, interval=interval, auto_adjust=False, actions=False)
@@ -1276,11 +1845,9 @@ def _yahoo_chart(sym: str, range_: str = "6mo", interval: str = "1d") -> dict:
                     })
             if rows:
                 meta = ticker.history_metadata or {}
-                previous_close = (
-                    rows[-2]["close"]
-                    if len(rows) > 1
-                    else safe_float(meta.get("chartPreviousClose", meta.get("previousClose")), rows[-1]["close"])
-                )
+                previous_close = safe_float(meta.get("chartPreviousClose", meta.get("previousClose")), None)
+                if previous_close is None:
+                    previous_close = rows[-2]["close"] if len(rows) > 1 else rows[-1]["close"]
                 data = {
                     "symbol": meta.get("symbol", sym),
                     "currency": meta.get("currency", ""),
@@ -1293,7 +1860,7 @@ def _yahoo_chart(sym: str, range_: str = "6mo", interval: str = "1d") -> dict:
             pass
 
     url = f"https://query1.finance.yahoo.com/v8/finance/chart/{sym}"
-    r = http_session().get(url, params={"range": range_, "interval": interval}, timeout=8)
+    r = http_session().get(url, params={"range": range_, "interval": interval}, timeout=YAHOO_REQUEST_TIMEOUT_SECONDS)
     r.raise_for_status()
     payload = r.json()["chart"]["result"][0]
     quote = payload["indicators"]["quote"][0]
@@ -1315,14 +1882,13 @@ def _yahoo_chart(sym: str, range_: str = "6mo", interval: str = "1d") -> dict:
     if len(rows) < 1:
         raise ValueError(f"Insufficient history for {sym}")
     meta = payload.get("meta", {})
+    previous_close = safe_float(meta.get("chartPreviousClose", meta.get("previousClose")), None)
+    if previous_close is None:
+        previous_close = rows[-2]["close"] if len(rows) > 1 else rows[-1]["close"]
     data = {
         "symbol": meta.get("symbol", sym),
         "currency": meta.get("currency", ""),
-        "previous_close": (
-            rows[-2]["close"]
-            if len(rows) > 1
-            else safe_float(meta.get("chartPreviousClose"), rows[-1]["close"])
-        ),
+        "previous_close": previous_close,
         "rows": rows,
     }
     _chart_cache[key] = (data, now)
@@ -1334,31 +1900,291 @@ def _yahoo_price(sym: str) -> tuple[float, float, float]:
     cached = _yahoo_cache.get(sym)
     if cached and (now - cached[3] < _yahoo_cache_ttl):
         return cached[0], cached[1], cached[2]
+    if yahoo_backoff_active():
+        if cached:
+            return cached[0], cached[1], cached[2]
+        raise RuntimeError("Yahoo backoff active")
 
     try:
-        data = _yahoo_chart(sym, range_="2d", interval="1d")
+        data = _yahoo_chart(sym, range_="1d", interval="1m")
         closes = [row["close"] for row in data["rows"]]
         p = float(closes[-1])
-        prev = float(closes[-2]) if len(closes) > 1 else p
+        prev = float(data.get("previous_close") or (closes[-2] if len(closes) > 1 else p))
         ch = round(p - prev, 2)
         pct = round((ch / prev * 100) if prev else 0, 2)
         _yahoo_cache[sym] = (round(p, 2), ch, pct, now)
+        _record_yahoo_ok(sym)
         return round(p, 2), ch, pct
     except Exception:
+        try:
+            data = _yahoo_chart(sym, range_="2d", interval="1d", allow_yfinance=False)
+            closes = [row["close"] for row in data["rows"]]
+            p = float(closes[-1])
+            prev = float(data.get("previous_close") or (closes[-2] if len(closes) > 1 else p))
+            ch = round(p - prev, 2)
+            pct = round((ch / prev * 100) if prev else 0, 2)
+            _yahoo_cache[sym] = (round(p, 2), ch, pct, now)
+            _record_yahoo_ok(sym)
+            return round(p, 2), ch, pct
+        except Exception as exc:
+            if cached:
+                return cached[0], cached[1], cached[2]
+            _record_yahoo_error(sym, exc)
+            raise
+
+
+def _clean_general_symbol(symbol: str) -> str:
+    return re.sub(r"[^A-Z0-9&.^-]", "", str(symbol or "").upper().strip())
+
+
+def stooq_symbol_meta(symbol: str) -> tuple[str, dict] | None:
+    clean = _clean_general_symbol(symbol)
+    if not clean:
+        return None
+    canonical = STOOQ_SYMBOL_ALIASES.get(clean, clean)
+    meta = STOOQ_GLOBAL_SYMBOLS.get(canonical)
+    if meta:
+        return meta["stooqSymbol"], meta
+    if canonical.startswith("^"):
+        return canonical, {"name": canonical, "sector": "Global Index", "stooqSymbol": canonical, "sym": ""}
+    if canonical.endswith(".US"):
+        return canonical, {"name": canonical, "sector": "Global Stock", "stooqSymbol": canonical, "sym": "$"}
+    return None
+
+
+def yahoo_symbol_for_stooq_symbol(symbol: str) -> str | None:
+    meta_pair = stooq_symbol_meta(symbol)
+    if not meta_pair:
+        return None
+    stooq_symbol, _meta = meta_pair
+    canonical = str(stooq_symbol or "").upper()
+    mapped = {
+        "GC.F": "GC=F",
+        "CL.F": "CL=F",
+        "CB.F": "BZ=F",
+        "USDINR": "USDINR=X",
+        "^SPX": "^GSPC",
+        "^NDQ": "^NDX",
+        "^DJI": "^DJI",
+        "^RUT": "^RUT",
+        "^DAX": "^GDAXI",
+        "^FTSE": "^FTSE",
+        "^NKX": "^N225",
+        "^HSI": "^HSI",
+    }.get(canonical)
+    if mapped:
+        return mapped
+    if canonical.endswith(".US"):
+        return canonical[:-3]
+    return None
+
+
+def fetch_yahoo_fallback_quotes_for_symbols(symbols: list[str], *, detail: str = "Yahoo fallback") -> dict[str, dict]:
+    clean_symbols = []
+    for sym in symbols:
+        clean = _clean_general_symbol(sym)
+        if clean and clean not in clean_symbols:
+            clean_symbols.append(clean)
+    if not clean_symbols:
+        return {}
+
+    out: dict[str, dict] = {}
+
+    def worker(sym: str) -> tuple[str, dict | None, Exception | None]:
+        try:
+            meta_pair = stooq_symbol_meta(sym)
+            if not meta_pair:
+                return sym, None, ValueError(f"No Stooq/Yahoo mapping for {sym}")
+            stooq_symbol, meta = meta_pair
+            yahoo_symbol = yahoo_symbol_for_stooq_symbol(sym)
+            if not yahoo_symbol:
+                return sym, None, ValueError(f"No Yahoo fallback mapping for {sym}")
+            price, change, pct = _yahoo_price(yahoo_symbol)
+            return sym, {
+                "symbol": sym,
+                "name": meta.get("name") or sym,
+                "price": price,
+                "change": change,
+                "pct": pct,
+                "live": False,
+                "sym": meta.get("sym") or "",
+                "fetchedAt": time.time(),
+                "source": "Yahoo",
+                "sourceDetail": detail,
+                "stooqSymbol": stooq_symbol,
+                "yahooSymbol": yahoo_symbol,
+            }, None
+        except Exception as exc:
+            return sym, None, exc
+
+    with ThreadPoolExecutor(max_workers=min(MAX_QUOTE_WORKERS, len(clean_symbols))) as executor:
+        futures = [executor.submit(worker, sym) for sym in clean_symbols]
+        for future in as_completed(futures):
+            sym, quote, error = future.result()
+            if error:
+                if _short_error(error) != "Yahoo backoff active":
+                    print(f"[!] Yahoo fallback {sym}: {_short_error(error)}")
+                continue
+            if quote:
+                out[sym] = quote
+    return out
+
+
+def stooq_quote_cache_ttl() -> float:
+    return STOOQ_QUOTE_CACHE_TTL
+
+
+def fetch_stooq_quotes_by_label(label_to_symbol: dict[str, str], *, prefer_page: bool = False) -> dict[str, dict]:
+    if not label_to_symbol:
+        return {}
+    now = time.time()
+    ttl = stooq_quote_cache_ttl()
+    out: dict[str, dict] = {}
+    pending: dict[str, tuple[str, dict]] = {}
+    stale_candidates: dict[str, dict] = {}
+    for label, symbol in label_to_symbol.items():
+        meta_pair = stooq_symbol_meta(symbol)
+        if not meta_pair:
+            continue
+        stooq_symbol, meta = meta_pair
+        cache_key = f"{label}|{stooq_symbol}"
+        cached = _stooq_quote_cache.get(cache_key)
         if cached:
-            return cached[0], cached[1], cached[2]
-        raise
+            cache_age = now - cached[1]
+            if cache_age < ttl:
+                out[label] = cached[0]
+                continue
+            if cache_age < STOOQ_STALE_IF_ERROR_SECONDS:
+                stale_candidates[label] = cached[0]
+        pending[label] = (stooq_symbol, meta)
+
+    if pending and stooq_backoff_active():
+        for label, quote in stale_candidates.items():
+            if label in pending:
+                out[label] = _stale_provider_quote(quote, "Stooq backoff active")
+        return out
+
+    def worker(item: tuple[str, tuple[str, dict]]) -> tuple[str, dict | None, Exception | None, float | None]:
+        label, (stooq_symbol, meta) = item
+        try:
+            if stooq_backoff_active():
+                raise RuntimeError("Stooq backoff active")
+            received_at = time.time()
+            started_at = time.perf_counter()
+            quote = None
+            csv_error = None
+            page_error = None
+
+            def fetch_page_quote() -> dict | None:
+                page = http_session().get(stooq_page_url(stooq_symbol), headers=STOOQ_HEADERS, timeout=STOOQ_REQUEST_TIMEOUT_SECONDS)
+                page.raise_for_status()
+                return stooq_quote_from_html(
+                    label,
+                    stooq_symbol,
+                    page.text,
+                    name=meta.get("name") or label,
+                    currency_symbol=meta.get("sym") or "",
+                    received_at=received_at,
+                )
+
+            if prefer_page:
+                try:
+                    quote = fetch_page_quote()
+                except Exception as exc:
+                    page_error = exc
+            if not quote:
+                try:
+                    r = http_session().get(stooq_quote_url(stooq_symbol), headers=STOOQ_HEADERS, timeout=STOOQ_REQUEST_TIMEOUT_SECONDS)
+                    r.raise_for_status()
+                    quote = stooq_quote_from_csv(
+                        label,
+                        stooq_symbol,
+                        r.text,
+                        name=meta.get("name") or label,
+                        currency_symbol=meta.get("sym") or "",
+                        received_at=received_at,
+                    )
+                except Exception as exc:
+                    csv_error = exc
+            if not quote and not prefer_page:
+                try:
+                    quote = fetch_page_quote()
+                except Exception as exc:
+                    page_error = exc
+            if not quote and (page_error or csv_error):
+                raise page_error or csv_error
+            if not quote:
+                raise ValueError(f"Stooq returned no quote for {stooq_symbol}")
+            return label, quote, None, (time.perf_counter() - started_at) * 1000
+        except Exception as exc:
+            return label, None, exc, None
+
+    if pending:
+        with ThreadPoolExecutor(max_workers=min(STOOQ_MAX_WORKERS, len(pending))) as executor:
+            futures = [executor.submit(worker, item) for item in pending.items()]
+            for future in as_completed(futures):
+                label, quote, error, latency_ms = future.result()
+                stooq_symbol = pending[label][0]
+                if error:
+                    if _short_error(error) == "Stooq backoff active":
+                        if label in stale_candidates:
+                            out[label] = _stale_provider_quote(stale_candidates[label], error)
+                        continue
+                    _record_stooq_error(label, stooq_symbol, error)
+                    if label in stale_candidates:
+                        out[label] = _stale_provider_quote(stale_candidates[label], error)
+                    continue
+                if quote:
+                    _record_stooq_ok(label, stooq_symbol, latency_ms)
+                    _stooq_quote_cache[f"{label}|{stooq_symbol}"] = (quote, time.time())
+                    out[label] = quote
+    return out
+
+
+def fetch_cross_asset_quotes() -> dict[str, dict]:
+    out = fetch_stooq_quotes_by_label(dict(STOOQ_CROSS_ASSETS), prefer_page=True)
+    yahoo_needed = {label: meta for label, meta in YAHOO_EXTRAS.items() if label not in out}
+    if not yahoo_needed:
+        return out
+
+    def yahoo_worker(item: tuple[str, tuple[str, str]]) -> tuple[str, str, str, tuple[float, float, float] | None, Exception | None]:
+        label, (sym, csym) = item
+        try:
+            return label, sym, csym, _yahoo_price(sym), None
+        except Exception as exc:
+            return label, sym, csym, None, exc
+
+    with ThreadPoolExecutor(max_workers=min(MAX_QUOTE_WORKERS, len(yahoo_needed))) as executor:
+        futures = [executor.submit(yahoo_worker, item) for item in yahoo_needed.items()]
+        for future in as_completed(futures):
+            label, sym, csym, result, error = future.result()
+            if error:
+                print(f"[!] Yahoo {label}: {error}")
+                continue
+            if result:
+                p, ch, pct = result
+                out[label] = {
+                    "price": p,
+                    "change": ch,
+                    "pct": pct,
+                    "live": False,
+                    "sym": csym,
+                    "fetchedAt": time.time(),
+                    "source": "Yahoo",
+                    "sourceDetail": "Yahoo fallback after Stooq miss",
+                }
+    return out
 
 
 def upstox_stream_subscription_map(state: dict | None = None) -> dict[str, str]:
     state = state or get_app_state_copy()
     labels = dict(UPSTOX_INDEX_INSTRUMENT_KEYS)
     for sym in NSE_STOCKS.values():
-        key = upstox_instrument_key_for_symbol(sym)
+        key = resolve_upstox_instrument_key(sym)
         if key:
             labels[sym] = key
     for sym in tracked_symbols_for_state(state):
-        key = upstox_instrument_key_for_symbol(sym)
+        key = resolve_upstox_instrument_key(sym)
         if key:
             labels[sym] = key
     return labels
@@ -1545,6 +2371,129 @@ def upstox_quotes_url(instrument_keys: list[str]) -> str:
     return f"{upstox_api_base()}/market-quote/quotes?instrument_key={encoded_keys}"
 
 
+def upstox_instrument_search_url(
+    query: str,
+    exchanges: str = "NSE",
+    segments: str = "EQ,INDEX",
+    records: int = 12,
+) -> str:
+    params = {
+        "query": query[:50],
+        "exchanges": exchanges,
+        "segments": segments,
+        "page_number": "1",
+        "records": str(min(max(records, 1), 30)),
+    }
+    return (
+        f"{upstox_api_base()}/instruments/search?"
+        + "&".join(f"{key}={quote(value, safe=',')}" for key, value in params.items())
+    )
+
+
+def _clean_market_symbol(symbol: str) -> str:
+    return re.sub(r"[^A-Z0-9&.-]", "", str(symbol or "").upper().strip())
+
+
+def _upstox_search_cache_key(query: str, exchanges: str, segments: str, records: int) -> str:
+    return "|".join([query.upper()[:50], exchanges.upper(), segments.upper(), str(records)])
+
+
+def upstox_search_instruments(
+    query: str,
+    exchanges: str = "NSE",
+    segments: str = "EQ,INDEX",
+    records: int = 12,
+) -> list[dict]:
+    query = str(query or "").strip()
+    if not query or not upstox_configured():
+        return []
+    cache_key = _upstox_search_cache_key(query, exchanges, segments, records)
+    now = time.time()
+    cached = _upstox_instrument_search_cache.get(cache_key)
+    if cached and now - cached[1] < UPSTOX_INSTRUMENT_SEARCH_TTL:
+        return list(cached[0])
+    payload = upstox_request_json(upstox_instrument_search_url(query, exchanges, segments, records), timeout=6)
+    rows = payload.get("data") if isinstance(payload, dict) else []
+    rows = rows if isinstance(rows, list) else []
+    _upstox_instrument_search_cache[cache_key] = (rows, now)
+    return list(rows)
+
+
+def _symbol_from_upstox_instrument(row: dict) -> str:
+    symbol = row.get("trading_symbol") or row.get("underlying_symbol") or row.get("short_name") or row.get("name")
+    return _clean_market_symbol(symbol)
+
+
+def _sector_for_upstox_instrument(row: dict) -> str:
+    segment = str(row.get("segment") or "")
+    if segment.endswith("_INDEX") or row.get("instrument_type") == "INDEX":
+        return "Index"
+    return (symbol_directory_entry(_symbol_from_upstox_instrument(row)) or {}).get("sector") or "General"
+
+
+def _upstox_instrument_to_suggestion(row: dict) -> dict | None:
+    instrument_key = str(row.get("instrument_key") or "").strip()
+    symbol = _symbol_from_upstox_instrument(row)
+    if not instrument_key or not symbol:
+        return None
+    name = str(row.get("short_name") or row.get("name") or symbol).strip()
+    return {
+        "symbol": symbol,
+        "name": name,
+        "sector": _sector_for_upstox_instrument(row),
+        "instrumentKey": instrument_key,
+        "source": "Upstox",
+    }
+
+
+def upstox_symbol_search_results(query: str, limit: int = 8) -> list[dict]:
+    q = _clean_market_symbol(query)
+    if len(q) < 2:
+        return []
+    try:
+        rows = upstox_search_instruments(query, records=min(max(limit * 2, 8), 30))
+    except Exception as exc:
+        if upstox_debug_enabled():
+            print(f"[!] Upstox instrument search failed for {q}: {exc}")
+        return []
+    suggestions = []
+    for row in rows:
+        item = _upstox_instrument_to_suggestion(row)
+        if item:
+            suggestions.append(item)
+    suggestions.sort(key=lambda item: (
+        0 if item["symbol"] == q else 1 if item["symbol"].startswith(q) else 2,
+        0 if item.get("sector") == "Index" else 1,
+        item["symbol"],
+    ))
+    out, seen = [], set()
+    for item in suggestions:
+        if item["symbol"] in seen:
+            continue
+        seen.add(item["symbol"])
+        out.append(item)
+        if len(out) >= limit:
+            break
+    return out
+
+
+def resolve_upstox_instrument_key(symbol: str) -> str | None:
+    clean = _clean_market_symbol(symbol)
+    if not clean:
+        return None
+    static_key = upstox_instrument_key_for_symbol(clean)
+    if static_key:
+        return static_key
+    for row in upstox_search_instruments(clean, records=12):
+        row_symbol = _symbol_from_upstox_instrument(row)
+        instrument_key = str(row.get("instrument_key") or "").strip()
+        segment = str(row.get("segment") or "")
+        instrument_type = str(row.get("instrument_type") or "")
+        if instrument_key and row_symbol == clean and (segment == "NSE_EQ" or segment == "NSE_INDEX" or instrument_type == "INDEX"):
+            return instrument_key
+    return None
+
+
 def upstox_option_chain_url(underlying_key: str, expiry_date: str) -> str:
     return (
         f"{upstox_api_base()}/option/chain"
@@ -1640,7 +2589,7 @@ def fetch_upstox_quotes_by_label(label_to_key: dict[str, str]) -> dict[str, dict
 
 def _fetch_upstox_quote(symbol: str) -> dict | None:
     clean = re.sub(r"[^A-Z0-9&.-]", "", (symbol or "").upper())
-    key = upstox_instrument_key_for_symbol(clean)
+    key = resolve_upstox_instrument_key(clean)
     if not clean or not key:
         return None
     return fetch_upstox_quotes_by_label({clean: key}).get(clean)
@@ -1648,6 +2597,63 @@ def _fetch_upstox_quote(symbol: str) -> dict | None:
 
 def fetch_upstox_index_quotes() -> dict[str, dict]:
     return fetch_upstox_quotes_by_label(dict(UPSTOX_INDEX_INSTRUMENT_KEYS))
+
+
+def ticker_payload_from_quote(quote: dict, default_sym: str = "") -> dict:
+    age = quote_age_seconds(quote)
+    stale_after = (stooq_quote_cache_ttl() * 2) if quote.get("stooqSymbol") or quote.get("source") == "Stooq" else nse_quote_cache_ttl() * 2
+    stale = bool(quote.get("stale")) or age is None or age > stale_after
+    payload = {
+        "price": quote["price"],
+        "change": quote["change"],
+        "pct": quote["pct"],
+        "live": quote.get("source") != "Yahoo" and not stale,
+        "sym": quote.get("sym", default_sym),
+        "fetchedAt": quote.get("fetchedAt", time.time()),
+        "ageSeconds": age,
+        "stale": stale,
+        "source": quote.get("source", "Market feed"),
+    }
+    for key in ["previous_close", "open", "day_high", "day_low", "providerTimestamp", "stooqSymbol", "sourceDetail", "yahooSymbol", "providerError"]:
+        if quote.get(key) is not None:
+            payload[key] = quote.get(key)
+    return payload
+
+
+def apply_quote_update_to_runtime(label: str, quote: dict, *, update_indexes: bool = True) -> None:
+    global _last_tick_refresh_ts
+    now = time.time()
+    index_label = next(
+        (idx_label for idx_label, key in UPSTOX_INDEX_INSTRUMENT_KEYS.items() if key == quote.get("instrumentKey")),
+        label if label in UPSTOX_INDEX_INSTRUMENT_KEYS else None,
+    )
+    ticker_label = "VIX" if index_label == "India VIX" else index_label or label
+    ticker_payload = ticker_payload_from_quote(quote, default_sym="" if index_label else "Rs")
+    price_history_updates: list[tuple[str, float]] = []
+    with _lock:
+        tracked_symbols = set(tracked_symbols_for_state(_app_state))
+        if update_indexes and index_label:
+            _index_snapshot[index_label] = dict(ticker_payload)
+            _ticks[ticker_label] = dict(ticker_payload)
+            price_history_updates.append((ticker_label, ticker_payload["price"]))
+        if label in tracked_symbols:
+            _tracked_symbol_quotes[label] = quote
+        _last_tick_refresh_ts = now
+        for hist_label, price in price_history_updates:
+            hist = _price_history.setdefault(hist_label, [])
+            if not hist or hist[-1] != price:
+                hist.append(price)
+            if len(hist) > MAX_HIST:
+                _price_history[hist_label] = hist[-MAX_HIST:]
+
+
+def maybe_broadcast_fast_market_snapshot(force: bool = False) -> None:
+    global _last_fast_stream_broadcast_ts
+    now = time.time()
+    if not force and now - _last_fast_stream_broadcast_ts < STREAM_UI_BROADCAST_SECONDS:
+        return
+    _last_fast_stream_broadcast_ts = now
+    broadcast_market_snapshot()
 
 
 def _set_upstox_stream_status(**patch) -> None:
@@ -1675,6 +2681,7 @@ def _apply_upstox_stream_payload(payload: dict, label_by_key: dict[str, str]) ->
         return
 
     updates: dict[str, tuple[dict, float]] = {}
+    labels_updated = False
     for instrument_key, feed in (payload.get("feeds") or {}).items():
         label = label_by_key.get(instrument_key, instrument_key)
         directory_entry = symbol_directory_entry(label)
@@ -1687,12 +2694,16 @@ def _apply_upstox_stream_payload(payload: dict, label_by_key: dict[str, str]) ->
         )
         if quote:
             updates[instrument_key] = (quote, time.time())
+            apply_quote_update_to_runtime(label, quote)
+            labels_updated = True
 
     if updates:
         with _lock:
             _upstox_stream_quote_cache.update(updates)
             _upstox_stream_status["lastMessageAt"] = time.time()
             _upstox_stream_status["lastError"] = None
+    if labels_updated:
+        maybe_broadcast_fast_market_snapshot()
 
 
 def upstox_stream_loop() -> None:
@@ -1790,16 +2801,21 @@ def upstox_stream_loop() -> None:
 
 
 def fetch_live_quote(symbol: str) -> dict | None:
+    clean = _clean_general_symbol(symbol)
+    if clean and stooq_symbol_meta(clean):
+        quote = fetch_stooq_quotes_by_label({clean: clean}).get(clean)
+        if quote:
+            return quote
     if active_market_data_provider() == UPSTOX_PROVIDER_NAME:
         try:
-            quote = _fetch_upstox_quote(symbol)
+            quote = _fetch_upstox_quote(clean or symbol)
             if quote:
                 return quote
         except Exception as exc:
             print(f"[!] Upstox {symbol}: {exc}")
         if not upstox_fallback_enabled():
             return None
-    return _fetch_nse_quote(symbol)
+    return _fetch_nse_quote(clean or symbol)
 
 
 def fetch_upstox_option_chain(underlying: str, expiry_date: str, max_rows: int = 80) -> dict:
@@ -1868,7 +2884,7 @@ def _fetch_nse_quote(symbol: str) -> dict | None:
 def _history_candidates(label_or_symbol: str, is_index: bool = False) -> list[str]:
     if is_index:
         return INDEX_HISTORY_SYMBOLS.get(label_or_symbol, [])
-    sym = re.sub(r"[^A-Z0-9.-]", "", label_or_symbol.upper())
+    sym = re.sub(r"[^A-Z0-9.^-]", "", label_or_symbol.upper())
     if not sym:
         return []
     if sym.startswith("^") or "." in sym:
@@ -1901,7 +2917,7 @@ def build_live_only_signal(symbol: str, live_quote: dict) -> dict:
 
     breakout_gap = ((price / day_high) - 1) * 100 if day_high else None
     return {
-        "symbol": re.sub(r"[^A-Z0-9&.-]", "", symbol.upper()),
+        "symbol": _clean_general_symbol(symbol),
         "name": live_quote.get("name") or symbol,
         "price": round(price, 2),
         "change": round(live_quote.get("change", 0.0), 2),
@@ -1974,7 +2990,7 @@ def build_symbol_signal(symbol: str, live_quote: dict | None = None, is_index: b
     drawdown_from_high = ((market_price / max(highs)) - 1) * 100 if highs else None
 
     return {
-        "symbol": re.sub(r"[^A-Z0-9&.-]", "", symbol.upper()),
+        "symbol": _clean_general_symbol(symbol),
         "name": (live_quote or {}).get("name") or symbol,
         "price": round(market_price, 2),
         "change": round(day_change, 2),
@@ -2156,24 +3172,27 @@ def fetch_tickers() -> tuple[dict, dict]:
                 "source": quote.get("source", "NSE"),
             }
 
-    # Yahoo extras with cache
-    def yahoo_worker(item: tuple[str, tuple[str, str]]) -> tuple[str, str, str, tuple[float, float, float] | None, Exception | None]:
-        label, (sym, csym) = item
-        try:
-            return label, sym, csym, _yahoo_price(sym), None
-        except Exception as exc:
-            return label, sym, csym, None, exc
-
-    with ThreadPoolExecutor(max_workers=min(MAX_QUOTE_WORKERS, len(YAHOO_EXTRAS))) as executor:
-        futures = [executor.submit(yahoo_worker, item) for item in YAHOO_EXTRAS.items()]
-        for future in as_completed(futures):
-            label, sym, csym, result, error = future.result()
-            if error:
-                print(f"[!] Yahoo {label}: {error}")
-                continue
-            if result:
-                p, ch, pct = result
-                out[label] = {"price": p, "change": ch, "pct": pct, "live": False, "sym": csym, "fetchedAt": fetched_at, "source": "Yahoo"}
+    with _lock:
+        previous_cross_ticks = {
+            label: dict(_ticks[label])
+            for label in STOOQ_CROSS_ASSETS
+            if label in _ticks
+        }
+    cross_quotes = fetch_cross_asset_quotes()
+    for label in STOOQ_CROSS_ASSETS:
+        quote = cross_quotes.get(label)
+        if quote:
+            out[label] = ticker_payload_from_quote(quote)
+            continue
+        previous = previous_cross_ticks.get(label)
+        previous_age = quote_age_seconds(previous)
+        if previous and previous_age is not None and previous_age <= STOOQ_STALE_IF_ERROR_SECONDS:
+            stale = dict(previous)
+            stale["stale"] = True
+            stale["live"] = False
+            stale["ageSeconds"] = previous_age
+            stale["sourceDetail"] = stale.get("sourceDetail") or "Cached while market providers retry"
+            out[label] = stale
 
     return out, analytics_indices
 
@@ -2323,7 +3342,7 @@ def build_market_analytics_payload(
     symbol_map = {}
     for sym in symbols:
         live_quote = (quote_map or {}).get(sym)
-        if live_quote is None:
+        if live_quote is None and quote_map is None:
             try:
                 live_quote = fetch_live_quote(sym)
             except Exception:
@@ -2827,6 +3846,41 @@ def ticker_loop() -> None:
         time.sleep(ticker_refresh_interval())
 
 
+def global_quote_loop() -> None:
+    global _last_tick_refresh_ts
+    while True:
+        try:
+            state = get_app_state_copy()
+            stooq_symbols = [
+                sym for sym in tracked_symbols_for_state(state)
+                if stooq_symbol_meta(sym)
+            ]
+            cross_quotes = fetch_cross_asset_quotes()
+            tracked_quotes = fetch_stooq_quotes_by_label({sym: sym for sym in stooq_symbols})
+            now = time.time()
+            history_updates: list[tuple[str, float]] = []
+            with _lock:
+                for label, quote in cross_quotes.items():
+                    _ticks[label] = ticker_payload_from_quote(quote)
+                    history_updates.append((label, quote["price"]))
+                if tracked_quotes:
+                    _tracked_symbol_quotes.update(tracked_quotes)
+                if cross_quotes or tracked_quotes:
+                    _last_tick_refresh_ts = now
+                for label, price in history_updates:
+                    hist = _price_history.setdefault(label, [])
+                    if not hist or hist[-1] != price:
+                        hist.append(price)
+                    if len(hist) > MAX_HIST:
+                        _price_history[label] = hist[-MAX_HIST:]
+            if cross_quotes or tracked_quotes:
+                rebuild_computed_payloads()
+                broadcast_market_snapshot()
+        except Exception as exc:
+            print(f"[!] global_quote_loop error: {exc}")
+        time.sleep(GLOBAL_QUOTE_REFRESH_SECONDS)
+
+
 # ── Flask ──────────────────────────────────────────────────────────────────
 FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"
 
@@ -2912,7 +3966,23 @@ def api_snapshot():
 @app.route("/api/symbols/search")
 def api_symbol_search():
     query = request.args.get("q", "")
-    return jsonify({"results": search_symbols(query)})
+    try:
+        limit = min(max(int(request.args.get("limit", 10)), 1), 20)
+    except Exception:
+        limit = 10
+    results, seen = [], set()
+    for item in search_symbols(query, limit=limit * 2):
+        symbol = item.get("symbol")
+        if symbol and symbol not in seen:
+            seen.add(symbol)
+            results.append(item)
+    if len(_clean_market_symbol(query)) >= 2 and not stooq_symbol_meta(query):
+        for item in upstox_symbol_search_results(query, limit=limit):
+            symbol = item.get("symbol")
+            if symbol and symbol not in seen:
+                seen.add(symbol)
+                results.append(item)
+    return jsonify({"results": results[:limit]})
 
 
 @app.route("/api/app-state", methods=["GET", "POST"])
@@ -2944,6 +4014,15 @@ def api_quotes():
         if quote is None or (quote_age_seconds(quote) is not None and quote_age_seconds(quote) > stale_after)
     ]
     fresh_quotes = refresh_quote_cache_for_symbols(refresh_symbols)
+    if fresh_quotes:
+        with _lock:
+            _tracked_symbol_quotes.update(fresh_quotes)
+        try:
+            rebuild_computed_payloads()
+            persist_runtime_snapshot_payload()
+            broadcast_market_snapshot()
+        except Exception:
+            pass
     merged = {sym: fresh_quotes.get(sym) or cached_quotes.get(sym) for sym in symbols}
     out = format_quotes_for_client({sym: quote for sym, quote in merged.items() if quote}, status=status)
     return jsonify(out)
@@ -3002,6 +4081,27 @@ def api_derivatives_option_chain():
     except Exception as exc:
         return jsonify({"error": str(exc), "provider": "Upstox"}), 502
     return jsonify(payload)
+
+
+@app.route("/api/ai-chat", methods=["POST"])
+def api_ai_chat():
+    payload = request.get_json(silent=True) or {}
+    question = _trim_text(payload.get("message"), 900)
+    history = payload.get("history") if isinstance(payload.get("history"), list) else []
+    if not question:
+        return jsonify({"error": "Ask a market question first."}), 400
+    try:
+        answer, provider_name, model_name = generate_ai_chat_response(question, history)
+    except AiProviderConfigurationError as exc:
+        return jsonify({"error": str(exc), "provider": ai_chat_provider_name()}), 400
+    except Exception as exc:
+        return jsonify({"error": f"AI chat failed: {exc}", "provider": ai_chat_provider_name()}), 502
+    return jsonify({
+        "answer": answer,
+        "provider": provider_name,
+        "model": model_name,
+        "generatedAt": ist_now().isoformat(),
+    })
 
 
 @app.route("/api/integrations/upstox/status")

@@ -36,17 +36,34 @@ let aiSummaryPollTimer;
 const AI_SUMMARY_POLL_INTERVAL_MS = 5000;
 const DEFAULT_TRACKED_TICKERS = ['INFY', 'HCLTECH', 'WIPRO', 'TCS', 'RELIANCE'];
 const DEFAULT_WATCHLIST = ['INFY', 'HCLTECH', 'WIPRO', 'RELIANCE'];
+const MAX_TRACKED_TICKERS = 20;
+const MAX_ANALYTICS_SYMBOLS = 20;
 const FIXED_TICKER_LABELS = ['Nifty 50', 'Nifty Bank', 'Nifty Midcap', 'Nifty Smallcap', 'VIX', 'Nifty IT', 'Gold', 'USD/INR', 'Crude Oil', 'Brent Crude'];
 const suggestTimers = {};
 const suggestHideTimers = {};
 
-const SYMBOL_ALIASES = { INFOSYS: 'INFY', HCL: 'HCLTECH' };
-const SYM_TO_LABEL = { INFY: 'Infosys', INFOSYS: 'Infosys', HCLTECH: 'HCL Tech', HCL: 'HCL Tech', WIPRO: 'Wipro', TCS: 'TCS', RELIANCE: 'Reliance' };
+const SYMBOL_ALIASES = {
+  INFOSYS: 'INFY', HCL: 'HCLTECH', NIFTY: 'NIFTY50', BANKNIFTY: 'NIFTYBANK',
+  SPX: '^SPX', NASDAQ: '^NDQ', NDX: '^NDQ', DOW: '^DJI', DJIA: '^DJI', RUT: '^RUT',
+  AAPL: 'AAPL.US', MSFT: 'MSFT.US', NVDA: 'NVDA.US', AMZN: 'AMZN.US', GOOGL: 'GOOGL.US',
+  META: 'META.US', TSLA: 'TSLA.US', USDINR: 'USDINR', CRUDE: 'CL.F',
+  BRENT: 'CB.F', BRENTCRUDE: 'CB.F', BENT: 'CB.F', BENTCRUDE: 'CB.F', GOLD: 'GC.F'
+};
+const SYM_TO_LABEL = {
+  INFY: 'Infosys', INFOSYS: 'Infosys', HCLTECH: 'HCL Tech', HCL: 'HCL Tech', WIPRO: 'Wipro', TCS: 'TCS', RELIANCE: 'Reliance',
+  NIFTY: 'Nifty 50', NIFTY50: 'Nifty 50', NIFTYBANK: 'Nifty Bank', BANKNIFTY: 'Nifty Bank', FINNIFTY: 'Nifty Financial',
+  NIFTYIT: 'Nifty IT', NIFTYMIDCAP100: 'Nifty Midcap 100', NIFTYSMLCAP100: 'Nifty Smallcap 100', INDIAVIX: 'India VIX',
+  '^SPX': 'S&P 500', '^NDQ': 'Nasdaq 100', '^DJI': 'Dow Jones', '^RUT': 'Russell 2000',
+  AAPL: 'Apple', 'AAPL.US': 'Apple', MSFT: 'Microsoft', 'MSFT.US': 'Microsoft',
+  NVDA: 'Nvidia', 'NVDA.US': 'Nvidia', TSLA: 'Tesla', 'TSLA.US': 'Tesla',
+  'CL.F': 'Crude Oil', 'CB.F': 'Brent Crude', BRENT: 'Brent Crude', BENT: 'Brent Crude',
+  USDINR: 'USD/INR', 'GC.F': 'Gold'
+};
 const SEC_BG = { IT: '#07234a', Banking: '#063321', Pharma: '#210f3a', Auto: '#2d1400', Energy: '#1c1200', FMCG: '#122000', Metals: '#1a1200', Infra: '#0f1e2d', General: '#101422' };
 const SEC_TC = { IT: '#60a5fa', Banking: '#34d399', Pharma: '#c084fc', Auto: '#fb923c', Energy: '#fbbf24', FMCG: '#a3e635', Metals: '#f97316', Infra: '#38bdf8', General: '#94a3b8' };
 
 function normalizeSymbol(sym) {
-  const clean = (sym || '').trim().toUpperCase().replace(/[^A-Z0-9&.-]/g, '');
+  const clean = (sym || '').trim().toUpperCase().replace(/[^A-Z0-9&.^-]/g, '');
   return SYMBOL_ALIASES[clean] || clean;
 }
 
@@ -72,6 +89,9 @@ try {
 }
 let stateSyncTimer;
 let snapshotTimer;
+let aiChatBusy = false;
+let aiChatMessages = readStorageJson('ai_chat_v1', []);
+if (!Array.isArray(aiChatMessages)) aiChatMessages = [];
 
 function cacheAppStateLocally() {
   localStorage.setItem('ticker_sel_v1', JSON.stringify([...tickerSelections]));
@@ -255,13 +275,37 @@ function renderMarketStatus() {
   }
   if (dataProvider && dataProvider.active) {
     const providerLabel = dataProvider.active === 'upstox'
-      ? dataProvider.degraded ? 'Upstox degraded · NSE fallback' : 'Upstox market data'
+      ? dataProvider.degraded ? 'Upstox degraded · NSE fallback' : dataProvider.streamConnected ? 'Upstox V3 stream' : 'Upstox market data'
       : 'NSE fallback';
     const providerClass = dataProvider.active === 'upstox'
       ? dataProvider.degraded ? 'sys-warn' : 'sys-ok'
       : 'sys-muted';
     const providerTitle = dataProvider.reason ? ` title="${escapeHtml(dataProvider.reason)}"` : '';
     pills.push(`<span class="sys-pill ${providerClass}"${providerTitle}>${escapeHtml(providerLabel)}</span>`);
+  }
+  if (dataProvider && dataProvider.stooq) {
+    const stooq = dataProvider.stooq;
+    const backoff = Number(stooq.retryInSeconds || 0);
+    const lastOk = stooq.lastOkAgeSeconds;
+    const retryLabel = backoff < 60 ? `${Math.ceil(backoff)}s` : `${Math.ceil(backoff / 60)}m`;
+    const stooqLabel = stooq.backoffActive
+      ? `Stooq retry ${retryLabel}`
+      : lastOk !== null && lastOk !== undefined
+        ? `Stooq ${ageLabel(lastOk)}`
+        : 'Stooq waiting';
+    const stooqClass = stooq.backoffActive ? 'sys-warn' : lastOk !== null && lastOk !== undefined ? 'sys-ok' : 'sys-muted';
+    const stooqTitle = [
+      stooq.lastError ? `Last error: ${stooq.lastError}` : '',
+      stooq.lastLatencyMs ? `Latency: ${stooq.lastLatencyMs}ms` : '',
+      stooq.failedSymbols && stooq.failedSymbols.length ? `Failed: ${stooq.failedSymbols.join(', ')}` : '',
+    ].filter(Boolean).join('\n');
+    pills.push(`<span class="sys-pill ${stooqClass}" title="${escapeHtml(stooqTitle)}">${escapeHtml(stooqLabel)}</span>`);
+  }
+  if (dataProvider && dataProvider.yahoo && dataProvider.yahoo.backoffActive) {
+    const retry = Number(dataProvider.yahoo.retryInSeconds || 0);
+    const retryLabel = retry < 60 ? `${Math.ceil(retry)}s` : `${Math.ceil(retry / 60)}m`;
+    const yahooTitle = dataProvider.yahoo.lastError ? `Last error: ${dataProvider.yahoo.lastError}` : 'Yahoo fallback is cooling down';
+    pills.push(`<span class="sys-pill sys-warn" title="${escapeHtml(yahooTitle)}">Yahoo retry ${escapeHtml(retryLabel)}</span>`);
   }
   const feedEntries = Object.entries(feedStatus || {});
   if (feedEntries.length) {
@@ -302,6 +346,141 @@ function switchTab(name, btn) {
   document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
   document.getElementById('tab-' + name).classList.add('active');
   if (btn) btn.classList.add('active');
+  if (name === 'chat') renderAiChat();
+}
+
+function persistAiChat() {
+  localStorage.setItem('ai_chat_v1', JSON.stringify(aiChatMessages.slice(-30)));
+}
+
+function chatTimeLabel(value) {
+  if (!value) return '';
+  const dt = new Date(value);
+  if (Number.isNaN(dt.getTime())) return '';
+  return dt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+
+function formatChatContent(value) {
+  const lines = String(value || '').split(/\n+/).map(line => line.trim()).filter(Boolean);
+  if (!lines.length) return '';
+  return lines.map(line => {
+    let html = escapeHtml(line).replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+    const heading = html.match(/^#{2,4}\s+(.+)/);
+    if (heading) return `<div class="chat-section-title">${heading[1]}</div>`;
+    const bullet = html.match(/^[-*]\s+(.+)/);
+    if (bullet) return `<div class="chat-list-line"><span>&bull;</span><span>${bullet[1]}</span></div>`;
+    const numbered = html.match(/^(\d+)\.\s+(.+)/);
+    if (numbered) return `<div class="chat-list-line"><span>${numbered[1]}.</span><span>${numbered[2]}</span></div>`;
+    return `<p>${html}</p>`;
+  }).join('');
+}
+
+function renderAiChat() {
+  const feed = document.getElementById('ai-chat-feed');
+  const input = document.getElementById('ai-chat-input');
+  const send = document.getElementById('ai-chat-send');
+  if (!feed) return;
+  if (!aiChatMessages.length) {
+    feed.innerHTML = `<div class="chat-empty">
+      <div class="chat-empty-orb">AI</div>
+      <div class="chat-empty-title">Ask the market desk anything.</div>
+      <div class="chat-empty-copy">I'll combine the live ticker strip, analytics board, latest articles, and fresh web/news context into one market-focused answer.</div>
+      <div class="chat-suggestions">
+        <button class="chat-suggestion" onclick="askAiChatExample('Why is Brent crude moving today?')">Why Brent?</button>
+        <button class="chat-suggestion" onclick="askAiChatExample('What is driving Bank Nifty today?')">Bank Nifty driver</button>
+        <button class="chat-suggestion" onclick="askAiChatExample('Summarize today\\'s risk tone for intraday trading.')">Risk tone</button>
+      </div>
+    </div>`;
+  } else {
+    feed.innerHTML = aiChatMessages.map(msg => {
+      const role = msg.role === 'user' ? 'user' : msg.error ? 'error' : 'assistant';
+      const meta = msg.role === 'assistant'
+        ? [msg.provider, msg.model, chatTimeLabel(msg.generatedAt)].filter(Boolean).join(' · ')
+        : chatTimeLabel(msg.generatedAt);
+      const contentHtml = msg.role === 'assistant' ? formatChatContent(msg.content || '') : escapeHtml(msg.content || '');
+      const avatar = msg.role === 'user' ? 'You' : msg.error ? '!' : 'AI';
+      return `<div class="chat-msg ${role}">
+        <div class="chat-avatar">${escapeHtml(avatar)}</div>
+        <div class="chat-message-body">
+          <div class="chat-meta">${escapeHtml(meta || role)}</div>
+          <div class="chat-bubble">${contentHtml}</div>
+        </div>
+      </div>`;
+    }).join('');
+  }
+  if (aiChatBusy) {
+    feed.insertAdjacentHTML('beforeend', `<div class="chat-msg assistant">
+      <div class="chat-avatar">AI</div>
+      <div class="chat-message-body">
+        <div class="chat-meta">Working</div>
+        <div class="chat-thinking"><span></span><span></span><span></span> Reading live dashboard + internet context</div>
+      </div>
+    </div>`);
+  }
+  if (send) send.disabled = aiChatBusy;
+  if (input) input.disabled = aiChatBusy;
+  feed.scrollTop = feed.scrollHeight;
+}
+
+function askAiChatExample(text) {
+  const input = document.getElementById('ai-chat-input');
+  if (!input) return;
+  input.value = text;
+  sendAiChat();
+}
+
+function clearAiChat() {
+  aiChatMessages = [];
+  persistAiChat();
+  renderAiChat();
+}
+
+function handleAiChatKey(event) {
+  if (event.key === 'Enter' && !event.shiftKey) {
+    event.preventDefault();
+    sendAiChat();
+  }
+}
+
+async function sendAiChat() {
+  if (aiChatBusy) return;
+  const input = document.getElementById('ai-chat-input');
+  const question = (input && input.value ? input.value : '').trim();
+  if (!question) return;
+  if (input) input.value = '';
+  const userMessage = { role: 'user', content: question, generatedAt: new Date().toISOString() };
+  aiChatMessages.push(userMessage);
+  persistAiChat();
+  aiChatBusy = true;
+  renderAiChat();
+  try {
+    const history = aiChatMessages.slice(-10).map(msg => ({ role: msg.role, content: msg.content }));
+    const response = await fetch('/api/ai-chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: question, history })
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error || 'AI chat request failed');
+    aiChatMessages.push({
+      role: 'assistant',
+      content: data.answer || 'I could not produce an answer from the current context.',
+      provider: data.provider,
+      model: data.model,
+      generatedAt: data.generatedAt || new Date().toISOString()
+    });
+  } catch (error) {
+    aiChatMessages.push({
+      role: 'assistant',
+      error: true,
+      content: error.message || 'AI chat failed. Check Bedrock configuration and network access.',
+      generatedAt: new Date().toISOString()
+    });
+  } finally {
+    aiChatBusy = false;
+    persistAiChat();
+    renderAiChat();
+  }
 }
 
 function setSort(s, btn) {
@@ -479,11 +658,11 @@ function renderTickerManager() {
 }
 
 function trackedTickerSymbols() {
-  return [...tickerSelections].filter(Boolean).slice(0, 12);
+  return [...tickerSelections].filter(Boolean).slice(0, MAX_TRACKED_TICKERS);
 }
 
 function analyticsSymbols() {
-  return [...new Set([...watchlist, ...Object.keys(portfolio)])].filter(Boolean).slice(0, 12);
+  return [...new Set([...watchlist, ...Object.keys(portfolio)])].filter(Boolean).slice(0, MAX_ANALYTICS_SYMBOLS);
 }
 
 function clearSuggestMenu(kind) {
@@ -539,7 +718,7 @@ function renderSuggestMenu(kind, results) {
 
 async function loadSuggestions(kind, query) {
   try {
-    const r = await fetch('/api/symbols/search?q=' + encodeURIComponent(query || ''));
+    const r = await fetch('/api/symbols/search?q=' + encodeURIComponent(query || '') + '&limit=12');
     const d = await r.json();
     renderSuggestMenu(kind, d.results || []);
   } catch (e) {
@@ -552,7 +731,7 @@ function handleSuggestInput(kind) {
   clearTimeout(suggestHideTimers[kind]);
   const inp = document.getElementById(inputIdFor(kind));
   if (!inp) return;
-  suggestTimers[kind] = setTimeout(() => loadSuggestions(kind, inp.value.trim()), 120);
+  suggestTimers[kind] = setTimeout(() => loadSuggestions(kind, inp.value.trim()), 180);
 }
 
 function pickSuggestion(kind, symbol) {
@@ -578,6 +757,7 @@ function addWL(symArg = null) {
     saveWL();
     renderWL();
     render();
+    warmSymbolQuotes([sym]);
     refreshSnapshotSoon();
     showToast(`Added ${sym} to watchlist`);
   }
@@ -597,8 +777,8 @@ function addTicker(symArg = null) {
   const inp = document.getElementById('ticker-inp');
   const sym = normalizeSymbol(symArg || inp.value);
   if (!sym) return;
-  if (trackedTickerSymbols().length >= 12 && !tickerSelections.has(sym)) {
-    showToast('Ticker strip is limited to 12 symbols');
+  if (trackedTickerSymbols().length >= MAX_TRACKED_TICKERS && !tickerSelections.has(sym)) {
+    showToast(`Ticker strip is limited to ${MAX_TRACKED_TICKERS} symbols`);
     return;
   }
   if (!tickerSelections.has(sym)) {
@@ -627,6 +807,17 @@ function toggleBookmark(id) {
   if (bookmarks.has(id)) bookmarks.delete(id); else bookmarks.add(id);
   saveBM();
   render();
+}
+
+async function warmSymbolQuotes(symbols) {
+  const clean = [...new Set((symbols || []).map(normalizeSymbol).filter(Boolean))];
+  if (!clean.length) return;
+  try {
+    await fetch('/api/quotes?symbols=' + encodeURIComponent(clean.join(',')));
+    refreshSnapshotSoon(120);
+  } catch (e) {
+    console.error('Symbol warmup error', e);
+  }
 }
 
 async function fetchTickerQuotes() {
@@ -1223,9 +1414,10 @@ function renderTickers(data) {
     const stale = Boolean(d.stale || (d.live && marketStatus && marketStatus.tickersStale));
     const liveDot = d.live ? `<span class="live-dot${stale ? ' stale' : ''}"></span>` : '';
     const freshness = age !== null ? ` | ${ageLabel(age)}` : '';
+    const sourceParts = [d.source || 'Market feed', d.sourceDetail, d.stooqSymbol, d.providerTimestamp].filter(Boolean);
     const hist = row.history;
     const spark = hist && hist.length > 1 ? sparklineSVG(hist, 60, 16) : '';
-    wrap.innerHTML += `<div class="ticker-item" title="${escapeHtml((d.source || 'Market feed') + freshness)}">
+    wrap.innerHTML += `<div class="ticker-item" title="${escapeHtml(sourceParts.join(' · ') + freshness)}">
       <span class="t-label">${liveDot}${label}</span>
       <span class="t-price ${dir}">${sym ? sym : ''}${d.price.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span>
       <span class="t-chg ${dir}">${arrow} ${sign}${d.pct.toFixed(2)}%</span>
@@ -1585,6 +1777,7 @@ renderWL();
 renderPortfolio();
 renderAnalytics();
 renderDerivativesAnalysis();
+renderAiChat();
 fetchNews();
 fetchMarketSnapshot(true);
 connectTickerSSE();
