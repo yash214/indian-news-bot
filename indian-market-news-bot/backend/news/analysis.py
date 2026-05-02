@@ -57,8 +57,10 @@ def build_article_analysis_prompt(article: dict) -> str:
     }
     return (
         "You are a senior Indian equity-market analyst helping an intraday trading dashboard.\n"
-        "Analyze the article for likely impact on major Indian indices. Return JSON only, with no markdown.\n"
-        "Be conservative: if evidence is thin, use neutral/limited and say details are limited.\n"
+        "Analyze the article for likely impact on major Indian indices. Return valid JSON only, with no markdown.\n"
+        "Do not give buy/sell trading advice. Do not invent facts, levels, figures, catalysts, or timelines.\n"
+        "Be conservative about index impact: if evidence is thin, use neutral impact or empty affected_indices.\n"
+        "If an article is company-specific and not index-relevant, affected_indices can be empty; include NIFTY only if truly relevant.\n"
         "Do not invent numbers, support/resistance levels, earnings figures, or catalysts not present in the article data.\n"
         "The summary must be useful to a trader and preserve material facts from the article body.\n"
         "Rank facts by market importance: core development, exact companies/entities, material numbers, market reaction, sector/index read-through, risks, and what to watch.\n"
@@ -67,17 +69,20 @@ def build_article_analysis_prompt(article: dict) -> str:
         "Avoid vague filler like 'may impact sentiment' unless you clearly say how and where the impact can show up.\n"
         "Impact score means expected relevance to Nifty, Bank Nifty, major sector indices, or market-wide risk appetite, not how exciting the headline sounds.\n"
         "If textSource is article-page, base the summary on availableText first and use the headline only as context.\n"
+        "Use allowed enums only. Use confidence from 0.0 to 1.0.\n"
         "Use this exact JSON shape:\n"
         "{"
         "\"summary\":\"5-6 sentence, 140-220 word plain-English market brief with all material numbers\","
         "\"sentiment\":\"bullish|bearish|neutral\","
-        "\"impactScore\":0,"
+        "\"impact_score\":0,"
         "\"confidence\":0.0,"
-        "\"sector\":\"IT|Banking|Pharma|Auto|Energy|FMCG|Metals|Infra|General\","
-        "\"indexImpact\":{\"nifty\":\"bullish|bearish|neutral|limited\","
-        "\"bankNifty\":\"bullish|bearish|neutral|limited\","
-        "\"sectorIndex\":\"bullish|bearish|neutral|limited\","
-        "\"timeframe\":\"intraday|1-3 days|unclear\"},"
+        "\"category\":\"macro|market_flow|sector|company|global|policy|general\","
+        "\"affected_indices\":[\"NIFTY\",\"BANKNIFTY\"],"
+        "\"affected_sectors\":[\"Banking\",\"Oil & Gas\",\"IT\"],"
+        "\"macro_tags\":[\"CRUDE\",\"USDINR\",\"RBI_POLICY\",\"FED\",\"FII_FLOWS\",\"GEOPOLITICAL_RISK\",\"INDIA_VIX\",\"GLOBAL_CUES\"],"
+        "\"event_risk\":{\"is_event_risk\":false,\"risk_level\":\"low|medium|high\",\"reason\":\"short reason\"},"
+        "\"trade_filter\":\"NO_FILTER|REDUCE_LONG_CONFIDENCE|REDUCE_SHORT_CONFIDENCE|EVENT_RISK_WAIT|BLOCK_FRESH_TRADES\","
+        "\"strategy_engine_guidance\":{\"long_confidence_adjustment\":0,\"short_confidence_adjustment\":0,\"block_fresh_trades\":false,\"notes\":\"short note\"},"
         "\"reasons\":[\"short reason 1\",\"short reason 2\"]"
         "}\n\n"
         "Article data:\n"
@@ -106,49 +111,12 @@ def extract_json_object(text: str) -> dict:
 
 def normalize_article_analysis(payload: dict, fallback_article: dict | None = None) -> dict:
     if not isinstance(payload, dict):
-        return {}
+        payload = {}
     fallback_article = fallback_article or {}
-    fallback_sentiment = (fallback_article.get("sentiment") or {}).get("label") or "neutral"
-    fallback_impact = fallback_article.get("impact", 0)
-    fallback_sector = fallback_article.get("sector") or "General"
+    try:
+        from backend.news.agent import NewsIntelligenceAgent, article_analysis_to_legacy_dict
+    except ModuleNotFoundError:
+        from news.agent import NewsIntelligenceAgent, article_analysis_to_legacy_dict
 
-    sentiment = str(payload.get("sentiment") or fallback_sentiment).strip().lower()
-    if sentiment not in VALID_SENTIMENTS:
-        sentiment = "neutral"
-
-    sector = _clean_text(payload.get("sector") or fallback_sector, max_len=32)
-    if sector not in VALID_SECTORS:
-        sector = fallback_sector if fallback_sector in VALID_SECTORS else "General"
-
-    index_impact_payload = payload.get("indexImpact") if isinstance(payload.get("indexImpact"), dict) else {}
-    index_impact = {}
-    for key in ("nifty", "bankNifty", "sectorIndex"):
-        tone = str(index_impact_payload.get(key) or "limited").strip().lower()
-        index_impact[key] = tone if tone in VALID_INDEX_TONES else "limited"
-    timeframe = _clean_text(index_impact_payload.get("timeframe") or "unclear", max_len=24).lower()
-    if timeframe not in {"intraday", "1-3 days", "unclear"}:
-        timeframe = "unclear"
-    index_impact["timeframe"] = timeframe
-
-    reasons = []
-    raw_reasons = payload.get("reasons") if isinstance(payload.get("reasons"), list) else []
-    for reason in raw_reasons:
-        text = _clean_text(reason, max_len=120)
-        if text:
-            reasons.append(text)
-        if len(reasons) >= 5:
-            break
-
-    summary = normalize_ai_summary(payload.get("summary") or "")
-    if not summary:
-        return {}
-
-    return {
-        "summary": summary,
-        "sentiment": sentiment,
-        "impactScore": _clamp_int(payload.get("impactScore"), 0, 10, _clamp_int(fallback_impact, 0, 10, 0)),
-        "confidence": round(_clamp_float(payload.get("confidence"), 0.0, 1.0, 0.5), 2),
-        "sector": sector,
-        "indexImpact": index_impact,
-        "reasons": reasons,
-    }
+    analysis = NewsIntelligenceAgent().normalize_llm_analysis(fallback_article, payload, None)
+    return article_analysis_to_legacy_dict(analysis)

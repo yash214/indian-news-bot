@@ -32,4 +32,4 @@ DEFAULT_APP_STATE = {
 ALLOWED_REFRESH_WINDOWS = [60, 120, 300, 600, 900]
 
 AI_SUMMARY_PROMPT_VERSION = "brief-v8-material-facts-market-impact"
-AI_ARTICLE_ANALYSIS_PROMPT_VERSION = "article-analysis-v4-material-facts-index-impact"
+AI_ARTICLE_ANALYSIS_PROMPT_VERSION = "article-analysis-v5-news-agent-index-schema"

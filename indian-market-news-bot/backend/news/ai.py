@@ -547,12 +547,12 @@ class NewsAiSummaryService:
                 if len(preview) > 500:
                     preview = preview[:500].rstrip() + "..."
                 self.set_ai_generation_error(summary_key, f"{self.ai_provider_name()}: JSON parse failed from model text: {preview or 'empty response'}")
-                return {}
+                raw_analysis = {}
             analysis = normalize_article_analysis(raw_analysis, fallback_article=article)
         except Exception as exc:
             self.set_ai_generation_error(summary_key, f"{self.ai_provider_name()}: {exc}")
             self.summary_retry_after_ts = time.time() + AI_SUMMARY_RETRY_AFTER_SECONDS
-            return {}
+            analysis = normalize_article_analysis({}, fallback_article=article)
         if not analysis:
             preview = str(raw_text or "").replace("\n", " ").replace("\r", " ").strip()
             if len(preview) > 500:

@@ -133,6 +133,12 @@ try:
     )
     from backend.news.ai import NewsAiSummaryService
     from backend.news.analysis import build_article_analysis_prompt, extract_json_object, normalize_article_analysis
+    from backend.news.report_aggregator import NewsReportAggregator
+    from backend.news.report_store import (
+        load_recent_article_ai_analyses,
+        save_article_ai_analysis,
+        save_index_news_report,
+    )
     from backend.news.summaries import (
         build_news_summary_prompt,
         extract_ollama_response_text,
@@ -268,6 +274,12 @@ except ModuleNotFoundError:
     )
     from news.ai import NewsAiSummaryService
     from news.analysis import build_article_analysis_prompt, extract_json_object, normalize_article_analysis
+    from news.report_aggregator import NewsReportAggregator
+    from news.report_store import (
+        load_recent_article_ai_analyses,
+        save_article_ai_analysis,
+        save_index_news_report,
+    )
     from news.summaries import (
         build_news_summary_prompt,
         extract_ollama_response_text,
@@ -1696,6 +1708,14 @@ def handle_ai_article_analysis_applied(article: dict) -> None:
         print(f"[!] AI analytics refresh error: {exc}")
 
 
+def persist_news_article_analysis(cache_key: str, article: dict, analysis: dict, path: Path = STATE_DB_PATH) -> None:
+    persist_ai_news_analysis(cache_key, article, analysis, path)
+    try:
+        save_article_ai_analysis(analysis, path)
+    except Exception as exc:
+        print(f"[!] news agent article analysis persist error: {exc}")
+
+
 def ai_summary_service() -> NewsAiSummaryService:
     global _ai_summary_service
     if _ai_summary_service is None:
@@ -1704,7 +1724,7 @@ def ai_summary_service() -> NewsAiSummaryService:
             load_persisted_summary=load_persisted_ai_news_summary,
             load_persisted_analysis=load_persisted_ai_news_analysis,
             persist_summary=persist_ai_news_summary,
-            persist_analysis=persist_ai_news_analysis,
+            persist_analysis=persist_news_article_analysis,
             articles_factory=lambda: _arts,
             articles_lock=_lock,
             on_analysis_applied=handle_ai_article_analysis_applied,
@@ -3940,6 +3960,38 @@ def api_news_ai_summaries():
         "updates": updates,
         "progress": ai_summary_progress_for_articles(articles),
         "updated": updated,
+    })
+
+
+@app.route("/api/news/agent/report")
+def api_news_agent_report():
+    index = request.args.get("index", "NIFTY")
+    try:
+        lookback_hours = int(request.args.get("lookback_hours", "24") or 24)
+    except (TypeError, ValueError):
+        lookback_hours = 24
+    lookback_hours = int(clamp(lookback_hours, 1, 168))
+    analyses = load_recent_article_ai_analyses(lookback_hours=lookback_hours)
+    report = NewsReportAggregator(analyses).build_report(index=index, lookback_hours=lookback_hours)
+    try:
+        save_index_news_report(report)
+    except Exception as exc:
+        print(f"[!] news agent report persist error: {exc}")
+    return jsonify(report.to_dict())
+
+
+@app.route("/api/news/agent/articles")
+def api_news_agent_articles():
+    try:
+        lookback_hours = int(request.args.get("lookback_hours", "24") or 24)
+    except (TypeError, ValueError):
+        lookback_hours = 24
+    lookback_hours = int(clamp(lookback_hours, 1, 168))
+    analyses = load_recent_article_ai_analyses(lookback_hours=lookback_hours)
+    return jsonify({
+        "lookback_hours": lookback_hours,
+        "count": len(analyses),
+        "articles": [analysis.to_dict() for analysis in analyses],
     })
 
 
