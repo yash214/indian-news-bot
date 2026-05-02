@@ -37,11 +37,12 @@ def main() -> int:
         ("market-desk-refresh", market_app.refresh_loop),
         ("market-desk-ticker", market_app.ticker_loop),
         ("market-desk-upstox-v3", market_app.upstox_stream_loop),
+        ("market-desk-macro-context", market_app.macro_context_loop),
     ]
     for name, target in workers:
         threading.Thread(target=target, daemon=True, name=name).start()
 
-    print("India Market Desk worker started: refresh, ticker, Upstox V3, AI queue")
+    print("India Market Desk worker started: refresh, ticker, Upstox V3, macro context, AI queue")
     while not STOP_EVENT.wait(timeout=30):
         pass
     print("India Market Desk worker stopping")

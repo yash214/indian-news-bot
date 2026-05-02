@@ -44,6 +44,8 @@ try:
         DEFAULT_APP_STATE,
         DEFAULT_TRACKED_TICKERS,
         DEFAULT_WATCHLIST,
+        MACRO_AGENT_ENABLED,
+        MACRO_AGENT_REFRESH_MODE,
         HOLIDAY_CALENDAR_PATH,
         IST,
         MARKET_CLOSE_TIME,
@@ -164,6 +166,11 @@ try:
     from backend.providers.upstox.v3_proto import decode_feed_response
     from backend.providers.upstox.live import build_stream_request, stream_authorize_url, stream_quote_from_feed
     from backend.providers.stooq import stooq_page_url, stooq_quote_from_csv, stooq_quote_from_html, stooq_quote_url
+    from backend.agents.macro_context import MacroContextAgent
+    from backend.agents.macro_context.snapshot_builder import MacroSnapshotBuilder
+    from backend.agents.macro_context.schedule import get_next_macro_refresh_time, is_macro_refresh_due
+    from backend.providers.india_vix_provider import IndiaVixProvider
+    from backend.routes.macro_agent_routes import register_macro_agent_routes
     from backend.agents.news.text import (
         build_article_preview,
         clean_headline,
@@ -185,6 +192,8 @@ except ModuleNotFoundError:
         DEFAULT_APP_STATE,
         DEFAULT_TRACKED_TICKERS,
         DEFAULT_WATCHLIST,
+        MACRO_AGENT_ENABLED,
+        MACRO_AGENT_REFRESH_MODE,
         HOLIDAY_CALENDAR_PATH,
         IST,
         MARKET_CLOSE_TIME,
@@ -305,6 +314,11 @@ except ModuleNotFoundError:
     from providers.upstox.v3_proto import decode_feed_response
     from providers.upstox.live import build_stream_request, stream_authorize_url, stream_quote_from_feed
     from providers.stooq import stooq_page_url, stooq_quote_from_csv, stooq_quote_from_html, stooq_quote_url
+    from agents.macro_context import MacroContextAgent
+    from agents.macro_context.snapshot_builder import MacroSnapshotBuilder
+    from agents.macro_context.schedule import get_next_macro_refresh_time, is_macro_refresh_due
+    from providers.india_vix_provider import IndiaVixProvider
+    from routes.macro_agent_routes import register_macro_agent_routes
     from agents.news.text import (
         build_article_preview,
         clean_headline,
@@ -457,6 +471,7 @@ _last_news_refresh_ts: float | None = None
 _last_tick_refresh_ts: float | None = None
 _last_analytics_refresh_ts: float | None = None
 _last_derivatives_refresh_ts: float | None = None
+_last_macro_context_run_at: datetime | None = None
 _last_fast_stream_broadcast_ts = 0.0
 
 _yahoo_cache: dict[str, tuple[float, float, float, float]] = {}
@@ -513,6 +528,27 @@ _upstox_stream_status = {
 # ── Helpers ────────────────────────────────────────────────────────────────
 def ist_now() -> datetime:
     return datetime.now(IST)
+
+
+def current_india_vix_quote() -> dict | None:
+    with _lock:
+        index_vix = dict(_index_snapshot.get("India VIX") or {}) if isinstance(_index_snapshot.get("India VIX"), dict) else {}
+        tick_vix = dict(_ticks.get("VIX") or _ticks.get("India VIX") or {}) if isinstance(_ticks.get("VIX") or _ticks.get("India VIX"), dict) else {}
+    payload = index_vix or tick_vix
+    return payload or None
+
+
+def build_macro_snapshot(*, use_mock: bool = False):
+    builder = MacroSnapshotBuilder(india_vix_provider=IndiaVixProvider(fetcher=current_india_vix_quote))
+    return builder.build_mock_snapshot() if use_mock else builder.build()
+
+
+def run_macro_context_cycle(*, force_refresh: bool = False, use_mock: bool = False):
+    snapshot = build_macro_snapshot(use_mock=use_mock)
+    report = MacroContextAgent().analyze(snapshot)
+    if force_refresh:
+        print("[*] Macro context refresh forced via API or worker call")
+    return report
 
 
 def is_market_open() -> bool:
@@ -1269,6 +1305,10 @@ def external_worker_mode() -> bool:
     return os.environ.get("MARKET_DESK_DISABLE_THREADS", "").strip().lower() in {"1", "true", "yes", "on"}
 
 
+def macro_background_thread_enabled() -> bool:
+    return "unittest" not in sys.modules and "pytest" not in sys.modules
+
+
 def start_background_workers() -> bool:
     global _background_threads_started
     if not background_threads_enabled():
@@ -1280,6 +1320,8 @@ def start_background_workers() -> bool:
         threading.Thread(target=ticker_loop, daemon=True, name="market-desk-ticker").start()
         threading.Thread(target=upstox_stream_loop, daemon=True, name="market-desk-upstox-v3").start()
         threading.Thread(target=global_quote_loop, daemon=True, name="market-desk-global-quotes").start()
+        if macro_background_thread_enabled():
+            threading.Thread(target=macro_context_loop, daemon=True, name="market-desk-macro-context").start()
         _background_threads_started = True
         return True
 
@@ -3866,6 +3908,23 @@ def ticker_loop() -> None:
         time.sleep(ticker_refresh_interval())
 
 
+def macro_context_loop() -> None:
+    global _last_macro_context_run_at
+    # FMP free-plan access is limited, so this loop only reacts to scheduled macro checkpoints.
+    while True:
+        try:
+            now = ist_now()
+            if MACRO_AGENT_ENABLED and MACRO_AGENT_REFRESH_MODE == "scheduled":
+                if is_macro_refresh_due(now, _last_macro_context_run_at):
+                    run_macro_context_cycle(force_refresh=False, use_mock=False)
+                    _last_macro_context_run_at = now
+                    next_run = get_next_macro_refresh_time(now)
+                    print(f"[~] Macro context refreshed at {now.isoformat()} | next={next_run.isoformat() if next_run else 'n/a'}")
+        except Exception as exc:
+            print(f"[!] macro_context_loop error: {exc}")
+        time.sleep(60)
+
+
 def global_quote_loop() -> None:
     global _last_tick_refresh_ts
     while True:
@@ -3905,6 +3964,7 @@ def global_quote_loop() -> None:
 FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"
 
 app = Flask(__name__, static_folder=str(FRONTEND_DIR), static_url_path="")
+register_macro_agent_routes(app, run_macro_context_cycle)
 
 
 @app.route("/api/news")

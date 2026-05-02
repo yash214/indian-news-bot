@@ -51,6 +51,55 @@ Production-friendly Upstox endpoints:
 
 - `GET /api/integrations/upstox/status`
 
+## Macro Context Agent
+
+The Macro Context Agent is a deterministic, rule-based layer that turns macro variables into a structured market-context report for India-focused index workflows. It does not produce buy/sell calls or place orders. Instead, it classifies whether the macro backdrop is supportive, mixed, bearish, or event-risk heavy, then maps that into trade filters and strategy-engine guidance such as reducing long confidence, reducing short confidence, waiting for event risk, or blocking fresh trades during extreme macro shock.
+
+Source stack:
+
+- FMP for `USD/INR`, gold, crude, US indices/global cues, the economic calendar, and optional basic macro snapshots
+- Upstox/current app quote state for India VIX through a small optional wrapper
+- Future India-specific provider stubs for RBI, MOSPI, NSDL/NSE, and CCIL
+
+Default scheduled times in `Asia/Kolkata`:
+
+- `08:35` pre-market macro report
+- `09:25` post-open macro confirmation
+- `12:30` mid-day macro check
+- `15:00` pre-close macro check
+- `15:45` post-market macro summary
+
+Important env vars:
+
+- `FMP_ENABLED=false`
+- `FMP_API_KEY=`
+- `FMP_TIMEOUT_SECONDS=8`
+- `FMP_CACHE_TTL_SECONDS=3600`
+- `MACRO_AGENT_ENABLED=true`
+- `MACRO_AGENT_REFRESH_MODE=scheduled`
+- `MACRO_AGENT_PREMARKET_TIME=08:35`
+- `MACRO_AGENT_OPEN_CHECK_TIME=09:25`
+- `MACRO_AGENT_MIDDAY_TIME=12:30`
+- `MACRO_AGENT_PRE_CLOSE_TIME=15:00`
+- `MACRO_AGENT_POSTMARKET_TIME=15:45`
+- `MACRO_AGENT_TIMEZONE=Asia/Kolkata`
+
+API endpoint:
+
+- `GET /api/agents/macro-context`
+- Query params: `force_refresh=true|false`, `mock=true|false`
+
+Run tests:
+
+```bash
+/Library/Frameworks/Python.framework/Versions/3.11/bin/python3 -m pytest
+```
+
+Strategy Engine integration:
+
+- The Macro Context Agent writes its latest JSON-serializable report into `backend/agents/agent_output_store.py`.
+- A future Strategy Engine can consume the report as a context/filter layer for long confidence, short confidence, position sizing, event-risk waiting, and extreme-risk trade blocking.
+
 ## Lightsail Deployment
 
 The repo now includes a Lightsail-oriented deployment path built around:
