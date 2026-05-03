@@ -36,6 +36,7 @@ except ModuleNotFoundError:
 
 class MacroContextAgent:
     AGENT_NAME = "macro_context_agent"
+    OUTPUT_KEY = f"{AGENT_NAME}:INDIA:MACRO_CONTEXT_REPORT"
     REQUIRED_FACTORS = ("usd_inr", "crude", "india_vix", "global_cues")
 
     def analyze(self, snapshot: MacroSnapshot) -> MacroContextReport:
@@ -87,7 +88,7 @@ class MacroContextAgent:
         for driver in calendar_drivers:
             if driver not in major_drivers:
                 major_drivers.append(driver)
-        impact_score = int(round(abs(weighted_macro_score(factor_scores))))
+        impact_score = min(10, int(round(abs(weighted_macro_score(factor_scores)))))
         report = MacroContextReport(
             agent_name=self.AGENT_NAME,
             generated_at=snapshot.timestamp,
@@ -111,7 +112,6 @@ class MacroContextAgent:
     def _persist_report(self, report: MacroContextReport) -> None:
         payload = report.to_dict()
         try:
-            save_agent_output(self.AGENT_NAME, payload)
-            save_agent_output(f"{self.AGENT_NAME}:INDIA:MACRO_CONTEXT_REPORT", payload)
+            save_agent_output(self.OUTPUT_KEY, payload)
         except Exception:
             return

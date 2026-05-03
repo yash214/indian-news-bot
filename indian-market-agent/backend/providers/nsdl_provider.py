@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import re
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from io import StringIO
 
 import pandas as pd
@@ -29,6 +29,8 @@ except ModuleNotFoundError:
 class NSDLProvider:
     LATEST_URL = "https://www.fpi.nsdl.co.in/Reports/Latest.aspx"
 
+    # Disabled by default via settings; live public HTML parsing is best-effort.
+    # Provider failures must update last_error and return None, not crash callers.
     def __init__(self, enabled: bool | None = None, timeout_seconds: int | None = None, cache_ttl_seconds: int | None = None, session: requests.Session | None = None):
         self.enabled = NSDL_PROVIDER_ENABLED if enabled is None else bool(enabled)
         self.timeout_seconds = int(timeout_seconds or NSDL_PROVIDER_TIMEOUT_SECONDS)
@@ -178,7 +180,7 @@ class NSDLProvider:
         return value
 
     def _mark_success(self) -> None:
-        self.last_success_at = datetime.utcnow()
+        self.last_success_at = datetime.now(timezone.utc)
         self.last_error = ""
 
 
@@ -284,8 +286,4 @@ def _safe_float(value) -> float | None:
             return None
         return float(str(value).replace(",", ""))
     except (TypeError, ValueError):
-        return None
-
-    def get_dii_flows_if_available(self):
-        # TODO: integrate DII flow data when a stable source is chosen.
         return None

@@ -44,6 +44,7 @@ try:
         DEFAULT_APP_STATE,
         DEFAULT_TRACKED_TICKERS,
         DEFAULT_WATCHLIST,
+        FO_AGENT_ENABLED,
         MACRO_AGENT_ENABLED,
         MACRO_AGENT_REFRESH_MODE,
         HOLIDAY_CALENDAR_PATH,
@@ -160,11 +161,22 @@ try:
     )
     from backend.providers.upstox.v3_proto import decode_feed_response
     from backend.providers.upstox.live import build_stream_request, stream_authorize_url, stream_quote_from_feed
+    from backend.agents.fo_structure import FOStructureAgent
+    from backend.agents.fo_structure.snapshot_builder import FOSnapshotBuilder
     from backend.agents.macro_context import MacroContextAgent
     from backend.agents.macro_context.snapshot_builder import MacroSnapshotBuilder
     from backend.agents.macro_context.schedule import get_next_macro_refresh_time, is_macro_refresh_due
     from backend.providers.india_vix_provider import IndiaVixProvider
+    from backend.routes.derivatives_routes import register_derivatives_routes
+    from backend.routes.fo_agent_routes import register_fo_agent_routes
+    from backend.routes.frontend_routes import register_frontend_routes
+    from backend.routes.health_routes import register_health_routes
     from backend.routes.macro_agent_routes import register_macro_agent_routes
+    from backend.routes.market_routes import register_market_routes
+    from backend.routes.news_agent_routes import register_news_agent_routes
+    from backend.routes.news_routes import register_news_routes
+    from backend.routes.upstox_routes import register_upstox_routes
+    from backend.services.runtime_state import AppRuntimeContext
     from backend.agents.news.text import (
         build_article_preview,
         clean_headline,
@@ -186,6 +198,7 @@ except ModuleNotFoundError:
         DEFAULT_APP_STATE,
         DEFAULT_TRACKED_TICKERS,
         DEFAULT_WATCHLIST,
+        FO_AGENT_ENABLED,
         MACRO_AGENT_ENABLED,
         MACRO_AGENT_REFRESH_MODE,
         HOLIDAY_CALENDAR_PATH,
@@ -302,11 +315,22 @@ except ModuleNotFoundError:
     )
     from providers.upstox.v3_proto import decode_feed_response
     from providers.upstox.live import build_stream_request, stream_authorize_url, stream_quote_from_feed
+    from agents.fo_structure import FOStructureAgent
+    from agents.fo_structure.snapshot_builder import FOSnapshotBuilder
     from agents.macro_context import MacroContextAgent
     from agents.macro_context.snapshot_builder import MacroSnapshotBuilder
     from agents.macro_context.schedule import get_next_macro_refresh_time, is_macro_refresh_due
     from providers.india_vix_provider import IndiaVixProvider
+    from routes.derivatives_routes import register_derivatives_routes
+    from routes.fo_agent_routes import register_fo_agent_routes
+    from routes.frontend_routes import register_frontend_routes
+    from routes.health_routes import register_health_routes
     from routes.macro_agent_routes import register_macro_agent_routes
+    from routes.market_routes import register_market_routes
+    from routes.news_agent_routes import register_news_agent_routes
+    from routes.news_routes import register_news_routes
+    from routes.upstox_routes import register_upstox_routes
+    from services.runtime_state import AppRuntimeContext
     from agents.news.text import (
         build_article_preview,
         clean_headline,
@@ -495,6 +519,13 @@ def run_macro_context_cycle(*, force_refresh: bool = False, use_mock: bool = Fal
     if force_refresh:
         print("[*] Macro context refresh forced via API or worker call")
     return report
+
+
+def run_fo_structure_cycle(symbol: str = "NIFTY", expiry: str | None = None):
+    if not FO_AGENT_ENABLED:
+        return FOStructureAgent().analyze(None, symbol=symbol)
+    snapshot = FOSnapshotBuilder().build(symbol=symbol, expiry=expiry)
+    return FOStructureAgent().analyze(snapshot, symbol=symbol)
 
 
 def is_market_open() -> bool:
@@ -3290,356 +3321,16 @@ def global_quote_loop() -> None:
 FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"
 
 app = Flask(__name__, static_folder=str(FRONTEND_DIR), static_url_path="")
-register_macro_agent_routes(app, run_macro_context_cycle)
-
-
-@app.route("/api/news")
-def api_news():
-    if external_worker_mode():
-        runtime_payload = runtime_news_payload_from_db()
-        if runtime_payload:
-            articles = runtime_payload.get("articles") if isinstance(runtime_payload.get("articles"), list) else []
-            for article in articles:
-                hydrate_article_from_ai_cache(article)
-            payload = {
-                "articles": articles,
-                "updated": runtime_payload.get("updated") or "",
-                "feedStatus": runtime_payload.get("feedStatus") if isinstance(runtime_payload.get("feedStatus"), dict) else {},
-                "refreshInterval": _news_refresh_seconds,
-                "allowedRefreshWindows": ALLOWED_REFRESH_WINDOWS,
-                "marketStatus": get_market_status(),
-                "aiSummaryProgress": runtime_payload.get("aiSummaryProgress") or ai_summary_progress_for_articles(articles),
-            }
-            return jsonify(payload)
-    with _lock:
-        articles = list(_arts)
-        payload = {
-            "articles": articles,
-            "updated": _updated,
-            "feedStatus": dict(_feed_status),
-            "refreshInterval": _news_refresh_seconds,
-            "allowedRefreshWindows": ALLOWED_REFRESH_WINDOWS,
-        }
-    payload["marketStatus"] = get_market_status()
-    payload["aiSummaryProgress"] = ai_summary_progress_for_articles(articles)
-    return jsonify(payload)
-
-
-@app.route("/api/news/ai-summaries")
-def api_news_ai_summaries():
-    if external_worker_mode():
-        runtime_payload = runtime_news_payload_from_db() or {}
-        articles = runtime_payload.get("articles") if isinstance(runtime_payload.get("articles"), list) else []
-        for article in articles:
-            hydrate_article_from_ai_cache(article)
-        updates = [ai_summary_update_payload(article) for article in articles if article_has_ai_summary(article)]
-        return jsonify({
-            "updates": updates,
-            "progress": runtime_payload.get("aiSummaryProgress") or ai_summary_progress_for_articles(articles),
-            "updated": runtime_payload.get("updated") or "",
-        })
-    with _lock:
-        articles = list(_arts)
-        updated = _updated
-    updates = [ai_summary_update_payload(article) for article in articles if article_has_ai_summary(article)]
-    return jsonify({
-        "updates": updates,
-        "progress": ai_summary_progress_for_articles(articles),
-        "updated": updated,
-    })
-
-
-# TODO: Move these News Agent routes into backend.routes.news_agent_routes
-# after the Flask app is converted to blueprints.
-@app.route("/api/news/agent/report")
-def api_news_agent_report():
-    index = request.args.get("index", "NIFTY")
-    try:
-        lookback_hours = int(request.args.get("lookback_hours", "24") or 24)
-    except (TypeError, ValueError):
-        lookback_hours = 24
-    lookback_hours = int(clamp(lookback_hours, 1, 168))
-    analyses = load_recent_article_ai_analyses(lookback_hours=lookback_hours)
-    report = NewsReportAggregator(analyses).build_report(index=index, lookback_hours=lookback_hours)
-    try:
-        save_index_news_report(report)
-    except Exception as exc:
-        print(f"[!] news agent report persist error: {exc}")
-    return jsonify(report.to_dict())
-
-
-@app.route("/api/news/agent/articles")
-def api_news_agent_articles():
-    try:
-        lookback_hours = int(request.args.get("lookback_hours", "24") or 24)
-    except (TypeError, ValueError):
-        lookback_hours = 24
-    lookback_hours = int(clamp(lookback_hours, 1, 168))
-    analyses = load_recent_article_ai_analyses(lookback_hours=lookback_hours)
-    return jsonify({
-        "lookback_hours": lookback_hours,
-        "count": len(analyses),
-        "articles": [analysis.to_dict() for analysis in analyses],
-    })
-
-
-@app.route("/api/tickers")
-def api_tickers():
-    if external_worker_mode():
-        runtime_payload = runtime_snapshot_from_db(include_history=False)
-        if runtime_payload and isinstance(runtime_payload.get("ticks"), dict):
-            return jsonify(runtime_payload["ticks"])
-    with _lock:
-        return jsonify(_ticks)
-
-
-@app.route("/api/snapshot")
-def api_snapshot():
-    include_history = request.args.get("history", "0") in {"1", "true", "yes"}
-    if external_worker_mode():
-        runtime_payload = runtime_snapshot_from_db(include_history=include_history)
-        if runtime_payload:
-            return jsonify(runtime_payload)
-    return jsonify(market_data_snapshot(include_history=include_history))
-
-
-@app.route("/api/symbols/search")
-def api_symbol_search():
-    query = request.args.get("q", "")
-    try:
-        limit = min(max(int(request.args.get("limit", 10)), 1), 20)
-    except Exception:
-        limit = 10
-    results, seen = [], set()
-    for item in search_symbols(query, limit=limit * 2):
-        symbol = item.get("symbol")
-        if symbol and symbol not in seen:
-            seen.add(symbol)
-            results.append(item)
-    if len(_clean_market_symbol(query)) >= 2:
-        for item in upstox_symbol_search_results(query, limit=limit):
-            symbol = item.get("symbol")
-            if symbol and symbol not in seen:
-                seen.add(symbol)
-                results.append(item)
-    return jsonify({"results": results[:limit]})
-
-
-@app.route("/api/app-state", methods=["GET", "POST"])
-def api_app_state():
-    if request.method == "POST":
-        payload = request.get_json(silent=True) or {}
-        state = update_app_state(payload)
-        with _lock:
-            has_stored_state = _has_persisted_state
-        return jsonify({"state": state, "hasStoredState": has_stored_state})
-
-    with _lock:
-        has_stored_state = _has_persisted_state
-    return jsonify({
-        "state": get_app_state_copy(),
-        "hasStoredState": has_stored_state,
-    })
-
-
-@app.route("/api/quotes")
-def api_quotes():
-    symbols = sanitize_symbol_list(request.args.get("symbols", ""))
-    status = get_market_status()
-    stale_after = nse_quote_cache_ttl(status) * 2
-    with _lock:
-        cached_quotes = {sym: _tracked_symbol_quotes.get(sym) for sym in symbols}
-    refresh_symbols = [
-        sym for sym, quote in cached_quotes.items()
-        if quote is None or (quote_age_seconds(quote) is not None and quote_age_seconds(quote) > stale_after)
-    ]
-    fresh_quotes = refresh_quote_cache_for_symbols(refresh_symbols)
-    if fresh_quotes:
-        with _lock:
-            _tracked_symbol_quotes.update(fresh_quotes)
-        try:
-            rebuild_computed_payloads()
-            persist_runtime_snapshot_payload()
-            broadcast_market_snapshot()
-        except Exception:
-            pass
-    merged = {sym: fresh_quotes.get(sym) or cached_quotes.get(sym) for sym in symbols}
-    out = format_quotes_for_client({sym: quote for sym, quote in merged.items() if quote}, status=status)
-    return jsonify(out)
-
-
-@app.route("/api/history")
-def api_history():
-    if external_worker_mode():
-        runtime_payload = runtime_snapshot_from_db(include_history=True)
-        if runtime_payload and isinstance(runtime_payload.get("history"), dict):
-            return jsonify(runtime_payload["history"])
-    with _lock:
-        return jsonify(_price_history)
-
-
-@app.route("/api/analytics")
-def api_analytics():
-    if external_worker_mode():
-        runtime_payload = runtime_snapshot_from_db(include_history=False)
-        if runtime_payload and isinstance(runtime_payload.get("analytics"), dict):
-            return jsonify(runtime_payload["analytics"])
-    with _lock:
-        payload = dict(_analytics_payload)
-    return jsonify(payload)
-
-
-@app.route("/api/derivatives/overview")
-def api_derivatives_overview():
-    if external_worker_mode():
-        runtime_payload = runtime_snapshot_from_db(include_history=False)
-        if runtime_payload and isinstance(runtime_payload.get("derivatives"), dict):
-            return jsonify(runtime_payload["derivatives"])
-    with _lock:
-        payload = dict(_derivatives_payload)
-    return jsonify(payload)
-
-
-@app.route("/api/derivatives/option-chain")
-def api_derivatives_option_chain():
-    underlying = request.args.get("underlying", "NIFTY")
-    expiry = request.args.get("expiry") or os.environ.get("UPSTOX_OPTION_EXPIRY", "")
-    max_rows = int(request.args.get("maxRows", "80") or 80)
-    try:
-        payload = fetch_upstox_option_chain(
-            underlying=underlying,
-            expiry_date=expiry,
-            max_rows=max(10, min(max_rows, 200)),
-        )
-    except ValueError as exc:
-        return jsonify({"error": str(exc), "provider": "Upstox"}), 400
-    except RuntimeError as exc:
-        return jsonify({"error": str(exc), "provider": "Upstox"}), 400
-    except requests.HTTPError as exc:
-        status_code = exc.response.status_code if exc.response is not None else 502
-        return jsonify({"error": "Upstox option-chain request failed", "provider": "Upstox"}), status_code
-    except Exception as exc:
-        return jsonify({"error": str(exc), "provider": "Upstox"}), 502
-    return jsonify(payload)
-
-
-@app.route("/api/ai-chat", methods=["POST"])
-def api_ai_chat():
-    payload = request.get_json(silent=True) or {}
-    question = _trim_text(payload.get("message"), 900)
-    history = payload.get("history") if isinstance(payload.get("history"), list) else []
-    if not question:
-        return jsonify({"error": "Ask a market question first."}), 400
-    try:
-        answer, provider_name, model_name = generate_ai_chat_response(question, history)
-    except AiProviderConfigurationError as exc:
-        return jsonify({"error": str(exc), "provider": ai_chat_provider_name()}), 400
-    except Exception as exc:
-        return jsonify({"error": f"AI chat failed: {exc}", "provider": ai_chat_provider_name()}), 502
-    return jsonify({
-        "answer": answer,
-        "provider": provider_name,
-        "model": model_name,
-        "generatedAt": ist_now().isoformat(),
-    })
-
-
-@app.route("/api/integrations/upstox/status")
-def api_upstox_status():
-    return jsonify(upstox_integration_status())
-
-
-@app.route("/api/settings/refresh", methods=["GET", "POST"])
-def api_settings_refresh():
-    if request.method == "POST":
-        data = request.get_json(silent=True) or {}
-        seconds = int(data.get("seconds", 0) or 0)
-        try:
-            current = set_news_refresh_seconds(seconds)
-        except ValueError:
-            return jsonify({"error": "Unsupported refresh interval", "allowed": ALLOWED_REFRESH_WINDOWS}), 400
-        return jsonify({"refreshInterval": current, "allowedRefreshWindows": ALLOWED_REFRESH_WINDOWS})
-
-    return jsonify({
-        "refreshInterval": get_news_refresh_seconds(),
-        "allowedRefreshWindows": ALLOWED_REFRESH_WINDOWS,
-    })
-
-
-@app.route("/api/health")
-def api_health():
-    market_status = get_market_status()
-    with _lock:
-        news_count = len(_arts)
-        ticker_count = len(_ticks)
-        analytics_ready = bool(_analytics_payload.get("generatedAt"))
-        derivatives_ready = bool(_derivatives_payload.get("generatedAt"))
-    status = "ok" if not market_status["staleData"] else "degraded"
-    return jsonify({
-        "status": status,
-        "dataProvider": market_data_provider_status(),
-        "upstox": upstox_integration_status(),
-        "marketStatus": market_status,
-        "newsCount": news_count,
-        "tickerCount": ticker_count,
-        "analyticsReady": analytics_ready,
-        "derivativesReady": derivatives_ready,
-        "refreshInterval": get_news_refresh_seconds(),
-    })
-
-
-@app.route("/api/tickers/stream")
-def api_tickers_stream():
-    if external_worker_mode():
-        def generate_from_runtime():
-            last_payload = ""
-            while True:
-                payload = runtime_snapshot_from_db(include_history=False) or market_data_snapshot(include_history=False)
-                encoded = json.dumps(payload, sort_keys=True)
-                if encoded != last_payload:
-                    yield "data:" + encoded + "\n\n"
-                    last_payload = encoded
-                else:
-                    yield ": keepalive\n\n"
-                time.sleep(ticker_refresh_interval())
-
-        return Response(
-            stream_with_context(generate_from_runtime()),
-            mimetype="text/event-stream",
-            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-        )
-
-    q: queue.Queue[str] = queue.Queue(maxsize=20)
-    with _sse_lock:
-        _sse_queues.append(q)
-    initial = market_data_snapshot(include_history=True)
-
-    def generate():
-        try:
-            yield "data:" + json.dumps(initial) + "\n\n"
-            while True:
-                try:
-                    msg = q.get(timeout=30)
-                    yield msg
-                except queue.Empty:
-                    yield ": keepalive\n\n"
-        finally:
-            with _sse_lock:
-                try:
-                    _sse_queues.remove(q)
-                except ValueError:
-                    pass
-
-    return Response(
-        stream_with_context(generate()),
-        mimetype="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-    )
-
-
-@app.route("/")
-def index():
-    return app.send_static_file("index.html")
+runtime_context = AppRuntimeContext(globals())
+register_frontend_routes(app, runtime_context)
+register_health_routes(app, runtime_context)
+register_news_routes(app, runtime_context)
+register_news_agent_routes(app, runtime_context)
+register_macro_agent_routes(app, runtime_context)
+register_fo_agent_routes(app, runtime_context)
+register_market_routes(app, runtime_context)
+register_derivatives_routes(app, runtime_context)
+register_upstox_routes(app, runtime_context)
 
 
 # ── Frontend entrypoint ────────────────────────────────────────────────────

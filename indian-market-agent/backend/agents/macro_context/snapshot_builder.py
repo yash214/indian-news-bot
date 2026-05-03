@@ -106,8 +106,8 @@ class MacroSnapshotBuilder:
                     "source": nsdl_flows.get("source"),
                     "raw": nsdl_flows,
                 })
-        except Exception:
-            pass
+        except Exception as exc:
+            _record_provider_error(self.nsdl_provider, "NSDL", exc)
         source_status["nsdl"] = self.nsdl_provider.source_status()
 
         try:
@@ -127,8 +127,8 @@ class MacroSnapshotBuilder:
                     "source": money_market.get("source"),
                     "raw": money_market,
                 })
-        except Exception:
-            pass
+        except Exception as exc:
+            _record_provider_error(self.ccil_provider, "CCIL", exc)
         source_status["ccil"] = self.ccil_provider.source_status()
 
         try:
@@ -144,8 +144,8 @@ class MacroSnapshotBuilder:
                 macro_event = _event_from_provider(event)
                 if macro_event:
                     events.append(macro_event)
-        except Exception:
-            pass
+        except Exception as exc:
+            _record_provider_error(self.rbi_provider, "RBI", exc)
         source_status["rbi"] = self.rbi_provider.source_status()
 
         try:
@@ -173,8 +173,8 @@ class MacroSnapshotBuilder:
                 macro_event = _event_from_provider(event)
                 if macro_event:
                     events.append(macro_event)
-        except Exception:
-            pass
+        except Exception as exc:
+            _record_provider_error(self.mospi_provider, "MOSPI", exc)
         source_status["mospi"] = self.mospi_provider.source_status()
 
         return MacroSnapshot(
@@ -247,6 +247,11 @@ def _event_from_provider(payload: dict | None) -> MacroEvent | None:
         previous=_safe_float(payload.get("previous")),
         source=payload.get("source"),
     )
+
+
+def _record_provider_error(provider, label: str, exc: Exception) -> None:
+    if hasattr(provider, "last_error"):
+        provider.last_error = f"{label} provider error: {str(exc)[:240]}"
 
 
 def _safe_float(value) -> float | None:

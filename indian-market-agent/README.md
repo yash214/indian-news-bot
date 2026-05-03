@@ -100,6 +100,32 @@ Strategy Engine integration:
 - The Macro Context Agent writes its latest JSON-serializable report into `backend/agents/agent_output_store.py`.
 - A future Strategy Engine can consume the report as a context/filter layer for long confidence, short confidence, position sizing, event-risk waiting, and extreme-risk trade blocking.
 
+## F&O Structure Agent
+
+The F&O Structure Agent is a read-only option-chain analysis layer for future strategy-engine context. It supports only NIFTY 50 and SENSEX options in v1. BANKNIFTY is intentionally out of scope and is returned as an unsupported neutral report rather than being analyzed.
+
+Source stack:
+
+- Upstox Analytics Token for read-only market-data APIs
+- Option Chain API for strike-wise CE/PE OI, volume, bid/ask, IV, and Greeks
+- Option Contracts API for expiries and contract metadata
+- Option Greeks API for optional selected-strike refreshes later
+
+The agent computes PCR, support/resistance zones, put/call writing, call/put unwinding, max pain, expiry risk, preferred option zones, and strategy-engine guidance such as reducing size or avoiding directional trades. It does not place orders, modify orders, cancel orders, or produce buy/sell recommendations.
+
+API endpoint:
+
+- `GET /api/agents/fo-structure`
+- Query params: `symbol=NIFTY|SENSEX`, `expiry=YYYY-MM-DD`, `mock=true|false`
+
+Useful local checks:
+
+```bash
+python3 -m pytest -q tests/agents/test_fo_pcr.py tests/agents/test_fo_zones.py tests/agents/test_fo_max_pain.py tests/agents/test_fo_structure_agent.py tests/providers/test_upstox_options_provider.py
+curl "http://127.0.0.1:9090/api/agents/fo-structure?symbol=NIFTY&mock=true"
+curl "http://127.0.0.1:9090/api/agents/fo-structure?symbol=SENSEX&mock=true"
+```
+
 ## Lightsail Deployment
 
 The repo now includes a Lightsail-oriented deployment path built around:

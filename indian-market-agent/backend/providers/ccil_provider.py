@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 import re
 import time
 from io import StringIO
@@ -21,6 +21,8 @@ class CCILProvider:
     BOND_URL = "https://www.ccilindia.com/daily-data"
     MONEY_MARKET_URL = "https://www.ccilindia.com/moneymarketsummury_daily_data"
 
+    # Disabled by default via settings; live public HTML parsing is best-effort.
+    # Provider failures must update last_error and return None, not crash callers.
     def __init__(self, enabled: bool | None = None, timeout_seconds: int | None = None, cache_ttl_seconds: int | None = None, session: requests.Session | None = None):
         self.enabled = CCIL_PROVIDER_ENABLED if enabled is None else bool(enabled)
         self.timeout_seconds = int(timeout_seconds or CCIL_PROVIDER_TIMEOUT_SECONDS)
@@ -226,7 +228,7 @@ class CCILProvider:
         return value
 
     def _mark_success(self) -> None:
-        self.last_success_at = datetime.utcnow()
+        self.last_success_at = datetime.now(timezone.utc)
         self.last_error = ""
 
 

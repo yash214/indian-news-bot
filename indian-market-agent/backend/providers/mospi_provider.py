@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 import re
 import time
 from io import StringIO
@@ -22,6 +22,8 @@ class MOSPIProvider:
     GDP_URL = "https://www.mospi.gov.in/dataviz-landing-page-1"
     IIP_URL = "https://www.mospi.gov.in/iip"
 
+    # Disabled by default via settings; live public HTML parsing is best-effort.
+    # Provider failures must update last_error and return None, not crash callers.
     def __init__(self, enabled: bool | None = None, timeout_seconds: int | None = None, cache_ttl_seconds: int | None = None, session: requests.Session | None = None):
         self.enabled = MOSPI_PROVIDER_ENABLED if enabled is None else bool(enabled)
         self.timeout_seconds = int(timeout_seconds or MOSPI_PROVIDER_TIMEOUT_SECONDS)
@@ -212,7 +214,7 @@ class MOSPIProvider:
         return value
 
     def _mark_success(self) -> None:
-        self.last_success_at = datetime.utcnow()
+        self.last_success_at = datetime.now(timezone.utc)
         self.last_error = ""
 
 
