@@ -914,6 +914,34 @@ class PersistenceTests(unittest.TestCase):
 
 
 class MarketSnapshotTests(unittest.TestCase):
+    def test_market_regime_mock_endpoint_supports_nifty_and_sensex(self):
+        with mock.patch("backend.agents.market_regime.agent.save_agent_report"):
+            with app.app.test_client() as client:
+                nifty_response = client.get("/api/agents/market-regime?symbol=NIFTY&mock=true")
+                sensex_response = client.get("/api/agents/market-regime?symbol=SENSEX&mock=true&regime_hint=bearish")
+
+        self.assertEqual(nifty_response.status_code, 200)
+        nifty_payload = nifty_response.get_json()
+        self.assertEqual(nifty_payload["symbol"], "NIFTY")
+        self.assertIn(nifty_payload["primary_regime"], {"TRENDING_UP", "BREAKOUT_UP"})
+
+        self.assertEqual(sensex_response.status_code, 200)
+        sensex_payload = sensex_response.get_json()
+        self.assertEqual(sensex_payload["symbol"], "SENSEX")
+        self.assertIn(sensex_payload["primary_regime"], {"TRENDING_DOWN", "BREAKDOWN"})
+
+    def test_market_regime_mock_endpoint_rejects_banknifty_safely(self):
+        with mock.patch("backend.agents.market_regime.agent.save_agent_report"):
+            with app.app.test_client() as client:
+                response = client.get("/api/agents/market-regime?symbol=BANKNIFTY&mock=true")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertEqual(payload["symbol"], "BANKNIFTY")
+        self.assertEqual(payload["primary_regime"], "UNCLEAR")
+        self.assertEqual(payload["trade_filter"], "WAIT")
+        self.assertIn("Unsupported symbol: BANKNIFTY. Supported symbols: NIFTY, SENSEX.", payload["warnings"])
+
     def test_market_snapshot_includes_live_payloads_and_freshness(self):
         now_ts = app.time.time()
         with app._lock:

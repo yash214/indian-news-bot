@@ -126,6 +126,37 @@ curl "http://127.0.0.1:9090/api/agents/fo-structure?symbol=NIFTY&mock=true"
 curl "http://127.0.0.1:9090/api/agents/fo-structure?symbol=SENSEX&mock=true"
 ```
 
+## Market Regime Agent
+
+The Market Regime Agent is a read-only candle-analysis layer for future strategy-engine context. It supports only `NIFTY` and `SENSEX` in v1; `BANKNIFTY` is intentionally out of scope and returns a safe `UNCLEAR` report instead of being analyzed.
+
+Source stack:
+
+- Upstox Intraday Candle Data V3 for current-day 5-minute candles
+- Upstox Historical Candle Data V3 for previous-day high/low/close context
+- Upstox OHLC Quotes V3 for optional quick quote and India VIX context
+
+The agent computes VWAP, EMA 9, EMA 21, RSI 14, ATR 14, opening range, previous-day levels, day high/low, trend/range/chop/volatility scores, and strategy-engine guidance such as preferring breakout filters, waiting, avoiding directional trades, or reducing size. It does not use websockets in v1; polling 5-minute candles is enough. It does not place orders, modify orders, cancel orders, or produce buy/sell recommendations.
+
+API endpoint:
+
+- `GET /api/agents/market-regime`
+- Query params: `symbol=NIFTY|SENSEX`, `timeframe=5`, `mock=true|false`, `regime_hint=bullish|bearish|range|choppy|high_vol`
+
+Useful local checks:
+
+```bash
+python3 -m pytest -q tests/agents/test_market_regime_indicators.py tests/agents/test_market_regime_scoring.py tests/agents/test_market_regime_agent.py tests/providers/test_upstox_market_data_provider.py tests/services/test_market_regime_runtime.py
+curl "http://127.0.0.1:9090/api/agents/market-regime?symbol=NIFTY&mock=true"
+curl "http://127.0.0.1:9090/api/agents/market-regime?symbol=SENSEX&mock=true"
+```
+
+## Agent Output Storage
+
+Agent reports keep the existing latest-report cache in `app_state` using keys such as `agent_output:market_regime_agent:NIFTY:MARKET_REGIME_REPORT`, so dashboard/runtime lookups remain compatible. Each structured agent report is also inserted into the generic `agent_outputs` table for historical debugging, audit trails, backtesting, outcome tracking, and future learning.
+
+The history layer currently covers News, Macro Context, F&O Structure, Market Regime, and future agents that call `save_agent_report()`. Schema scaffolding is also present for later learning phases: `agent_outcomes`, `error_analysis`, `tuning_suggestions`, `ruleset_versions`, and `audit_logs`.
+
 ## Lightsail Deployment
 
 The repo now includes a Lightsail-oriented deployment path built around:

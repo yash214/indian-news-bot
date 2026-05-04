@@ -172,10 +172,12 @@ try:
     from backend.routes.frontend_routes import register_frontend_routes
     from backend.routes.health_routes import register_health_routes
     from backend.routes.macro_agent_routes import register_macro_agent_routes
+    from backend.routes.market_regime_routes import register_market_regime_routes
     from backend.routes.market_routes import register_market_routes
     from backend.routes.news_agent_routes import register_news_agent_routes
     from backend.routes.news_routes import register_news_routes
     from backend.routes.upstox_routes import register_upstox_routes
+    from backend.services import market_regime_runtime
     from backend.services.runtime_state import AppRuntimeContext
     from backend.agents.news.text import (
         build_article_preview,
@@ -326,10 +328,12 @@ except ModuleNotFoundError:
     from routes.frontend_routes import register_frontend_routes
     from routes.health_routes import register_health_routes
     from routes.macro_agent_routes import register_macro_agent_routes
+    from routes.market_regime_routes import register_market_regime_routes
     from routes.market_routes import register_market_routes
     from routes.news_agent_routes import register_news_agent_routes
     from routes.news_routes import register_news_routes
     from routes.upstox_routes import register_upstox_routes
+    from services import market_regime_runtime
     from services.runtime_state import AppRuntimeContext
     from agents.news.text import (
         build_article_preview,
@@ -526,6 +530,31 @@ def run_fo_structure_cycle(symbol: str = "NIFTY", expiry: str | None = None):
         return FOStructureAgent().analyze(None, symbol=symbol)
     snapshot = FOSnapshotBuilder().build(symbol=symbol, expiry=expiry)
     return FOStructureAgent().analyze(snapshot, symbol=symbol)
+
+
+def build_market_regime_snapshot(symbol: str = "NIFTY", timeframe_minutes: int = 5, use_mock: bool = False):
+    return market_regime_runtime.build_market_regime_snapshot(
+        symbol=symbol,
+        timeframe_minutes=timeframe_minutes,
+        use_mock=use_mock,
+    )
+
+
+def run_market_regime_cycle(symbol: str = "NIFTY", timeframe_minutes: int = 5, force_refresh: bool = False, use_mock: bool = False):
+    return market_regime_runtime.run_market_regime_cycle(
+        symbol=symbol,
+        timeframe_minutes=timeframe_minutes,
+        force_refresh=force_refresh,
+        use_mock=use_mock,
+    )
+
+
+def get_latest_market_regime_report(symbol: str = "NIFTY"):
+    return market_regime_runtime.get_latest_market_regime_report(symbol=symbol)
+
+
+def market_regime_runtime_status() -> dict:
+    return market_regime_runtime.market_regime_runtime_status()
 
 
 def is_market_open() -> bool:
@@ -3328,6 +3357,7 @@ register_news_routes(app, runtime_context)
 register_news_agent_routes(app, runtime_context)
 register_macro_agent_routes(app, runtime_context)
 register_fo_agent_routes(app, runtime_context)
+register_market_regime_routes(app, runtime_context)
 register_market_routes(app, runtime_context)
 register_derivatives_routes(app, runtime_context)
 register_upstox_routes(app, runtime_context)

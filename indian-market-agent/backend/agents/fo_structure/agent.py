@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 
 try:
-    from backend.agents.agent_output_store import save_agent_output
+    from backend.agents.agent_output_store import save_agent_report
     from backend.agents.fo_structure.expiry_risk import calculate_expiry_risk
     from backend.agents.fo_structure.liquidity import check_liquidity
     from backend.agents.fo_structure.max_pain import calculate_max_pain
@@ -28,7 +28,7 @@ try:
     from backend.agents.fo_structure.strike_zones import find_atm_strike, find_resistance_zones, find_support_zones
     from backend.core.settings import FO_AGENT_REFRESH_SECONDS, IST
 except ModuleNotFoundError:
-    from agents.agent_output_store import save_agent_output
+    from agents.agent_output_store import save_agent_report
     from agents.fo_structure.expiry_risk import calculate_expiry_risk
     from agents.fo_structure.liquidity import check_liquidity
     from agents.fo_structure.max_pain import calculate_max_pain
@@ -152,7 +152,16 @@ class FOStructureAgent:
 
     def _persist_report(self, report: FOStructureReport) -> None:
         try:
-            save_agent_output(f"{self.AGENT_NAME}:{report.symbol}:FO_STRUCTURE_REPORT", report.to_dict())
+            save_agent_report(
+                agent_name=self.AGENT_NAME,
+                symbol=report.symbol,
+                report_type="FO_STRUCTURE_REPORT",
+                payload=report.to_dict(),
+                bias=report.bias,
+                confidence=report.confidence,
+                ruleset_version="fo_rules_v1",
+                agent_version="1.0.0",
+            )
         except Exception:
             return
 

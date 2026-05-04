@@ -102,6 +102,184 @@ def init_state_db(path: Path = STATE_DB_PATH) -> None:
             )
             """
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS agent_outputs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                agent_name TEXT NOT NULL,
+                symbol TEXT NOT NULL,
+                report_type TEXT NOT NULL,
+
+                generated_at TEXT NOT NULL,
+                generated_ts REAL NOT NULL,
+                valid_until TEXT,
+                stale_after_seconds INTEGER,
+
+                bias TEXT,
+                confidence REAL,
+
+                payload_json TEXT NOT NULL,
+
+                input_hash TEXT,
+                ruleset_version TEXT,
+                agent_version TEXT,
+
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_agent_outputs_latest
+            ON agent_outputs(agent_name, symbol, report_type, generated_ts)
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_agent_outputs_agent_time
+            ON agent_outputs(agent_name, generated_ts)
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_agent_outputs_symbol_time
+            ON agent_outputs(symbol, generated_ts)
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_agent_outputs_report_type_time
+            ON agent_outputs(report_type, generated_ts)
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS agent_outcomes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                agent_output_id INTEGER,
+                agent_name TEXT NOT NULL,
+                symbol TEXT NOT NULL,
+                report_type TEXT NOT NULL,
+
+                prediction_time TEXT NOT NULL,
+                outcome_time TEXT NOT NULL,
+                outcome_window_minutes INTEGER NOT NULL,
+
+                predicted_bias TEXT,
+                predicted_confidence REAL,
+
+                actual_move_pct REAL,
+                actual_direction TEXT,
+                prediction_correct INTEGER,
+
+                error_type TEXT,
+                outcome_json TEXT NOT NULL,
+
+                created_at TEXT NOT NULL,
+
+                FOREIGN KEY(agent_output_id) REFERENCES agent_outputs(id)
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_agent_outcomes_agent_symbol_time
+            ON agent_outcomes(agent_name, symbol, outcome_time)
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS error_analysis (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                agent_output_id INTEGER,
+                agent_name TEXT NOT NULL,
+                symbol TEXT NOT NULL,
+
+                error_type TEXT NOT NULL,
+                severity TEXT,
+                root_cause TEXT,
+                evidence_json TEXT NOT NULL,
+                recommendation TEXT,
+
+                created_at TEXT NOT NULL,
+
+                FOREIGN KEY(agent_output_id) REFERENCES agent_outputs(id)
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_error_analysis_agent_type
+            ON error_analysis(agent_name, error_type)
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS tuning_suggestions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                agent_name TEXT NOT NULL,
+                symbol TEXT,
+                suggestion_type TEXT NOT NULL,
+
+                parameter_name TEXT,
+                current_value TEXT,
+                proposed_value TEXT,
+
+                evidence_json TEXT NOT NULL,
+                expected_impact TEXT,
+                status TEXT NOT NULL,
+
+                backtest_result_json TEXT,
+                paper_validation_json TEXT,
+
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_tuning_suggestions_agent_status
+            ON tuning_suggestions(agent_name, status)
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS ruleset_versions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                agent_name TEXT NOT NULL,
+                ruleset_version TEXT NOT NULL,
+                status TEXT NOT NULL,
+
+                config_json TEXT NOT NULL,
+                changes_json TEXT,
+                created_at TEXT NOT NULL,
+                promoted_at TEXT,
+
+                UNIQUE(agent_name, ruleset_version)
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS audit_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                event_type TEXT NOT NULL,
+                component TEXT NOT NULL,
+                symbol TEXT,
+                severity TEXT,
+                message TEXT NOT NULL,
+                payload_json TEXT,
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_audit_logs_component_time
+            ON audit_logs(component, created_at)
+            """
+        )
         conn.commit()
 
 

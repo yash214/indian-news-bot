@@ -8,11 +8,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 try:
+    from backend.agents.agent_output_store import save_agent_report
     from backend.core.persistence import db_connect, init_state_db
     from backend.core.settings import STATE_DB_PATH
     from backend.agents.news.schemas import ArticleAIAnalysis, EventRisk, IndexNewsReport, StrategyEngineGuidance
     from backend.agents.news.text import url_hash
 except ModuleNotFoundError:
+    from agents.agent_output_store import save_agent_report
     from core.persistence import db_connect, init_state_db
     from core.settings import STATE_DB_PATH
     from agents.news.schemas import ArticleAIAnalysis, EventRisk, IndexNewsReport, StrategyEngineGuidance
@@ -222,6 +224,20 @@ def save_index_news_report(report: IndexNewsReport | dict, path: Path = STATE_DB
             ),
         )
         conn.commit()
+    try:
+        save_agent_report(
+            agent_name="news_agent",
+            symbol=report.index or "INDIA",
+            report_type="NEWS_INDEX_REPORT",
+            payload=payload,
+            bias=report.overall_sentiment,
+            confidence=report.confidence,
+            ruleset_version="news_rules_v1",
+            agent_version="1.0.0",
+            path=path,
+        )
+    except Exception:
+        return
 
 
 def load_latest_index_news_report(index: str = "NIFTY", path: Path = STATE_DB_PATH) -> dict | None:

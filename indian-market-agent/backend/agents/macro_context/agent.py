@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import timedelta
 
 try:
-    from backend.agents.agent_output_store import save_agent_output
+    from backend.agents.agent_output_store import save_agent_report
     from backend.agents.macro_context.factor_rules import is_extreme_macro_shock, score_economic_calendar, score_factor
     from backend.agents.macro_context.macro_scoring import (
         build_major_drivers,
@@ -19,7 +19,7 @@ try:
     from backend.agents.macro_context.schemas import MacroContextReport, MacroSnapshot
     from backend.core.settings import MACRO_AGENT_SNAPSHOT_TTL_SECONDS
 except ModuleNotFoundError:
-    from agents.agent_output_store import save_agent_output
+    from agents.agent_output_store import save_agent_report
     from agents.macro_context.factor_rules import is_extreme_macro_shock, score_economic_calendar, score_factor
     from agents.macro_context.macro_scoring import (
         build_major_drivers,
@@ -112,6 +112,15 @@ class MacroContextAgent:
     def _persist_report(self, report: MacroContextReport) -> None:
         payload = report.to_dict()
         try:
-            save_agent_output(self.OUTPUT_KEY, payload)
+            save_agent_report(
+                agent_name=self.AGENT_NAME,
+                symbol="INDIA",
+                report_type="MACRO_CONTEXT_REPORT",
+                payload=payload,
+                bias=report.macro_bias,
+                confidence=report.confidence,
+                ruleset_version="macro_rules_v1",
+                agent_version="1.0.0",
+            )
         except Exception:
             return
