@@ -15,7 +15,7 @@ def register_macro_agent_routes(app, context) -> None:
     def api_macro_context_report():
         force_refresh = _bool_arg(request.args.get("force_refresh"))
         use_mock = _bool_arg(request.args.get("mock"))
-        report = context.run_macro_context_cycle(force_refresh=force_refresh, use_mock=use_mock)
+        report = context.run_macro_context_cycle(force_refresh=force_refresh, use_mock=use_mock, context=context)
         return jsonify(to_jsonable(report))
 
 

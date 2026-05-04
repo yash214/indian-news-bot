@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 try:
-    from backend.agents.agent_output_store import load_agent_output
+    from backend.agents.agent_output_store import load_agent_output, load_latest_agent_report
     from backend.agents.market_regime.agent import MarketRegimeAgent
     from backend.agents.market_regime.schemas import is_supported_symbol, normalize_market_symbol
     from backend.agents.market_regime.snapshot_builder import (
@@ -17,14 +17,20 @@ try:
         UPSTOX_MARKET_DATA_ENABLED,
     )
 except ModuleNotFoundError:
-    from agents.agent_output_store import load_agent_output
+    from agents.agent_output_store import load_agent_output, load_latest_agent_report
     from agents.market_regime.agent import MarketRegimeAgent
     from agents.market_regime.schemas import is_supported_symbol, normalize_market_symbol
     from agents.market_regime.snapshot_builder import MarketRegimeSnapshotBuilder, build_mock_market_feature_snapshot
     from core.settings import MARKET_REGIME_AGENT_ENABLED, MARKET_REGIME_REFRESH_SECONDS, MARKET_REGIME_TIMEFRAME_MINUTES, UPSTOX_MARKET_DATA_ENABLED
 
 
-def build_market_regime_snapshot(symbol: str = "NIFTY", timeframe_minutes: int = 5, use_mock: bool = False, regime_hint: str | None = None):
+def build_market_regime_snapshot(
+    symbol: str = "NIFTY",
+    timeframe_minutes: int = 5,
+    use_mock: bool = False,
+    context=None,
+    regime_hint: str | None = None,
+):
     clean = normalize_market_symbol(symbol)
     if use_mock:
         if not is_supported_symbol(clean):
@@ -38,6 +44,7 @@ def run_market_regime_cycle(
     timeframe_minutes: int = 5,
     force_refresh: bool = False,
     use_mock: bool = False,
+    context=None,
     regime_hint: str | None = None,
 ):
     clean = normalize_market_symbol(symbol)
@@ -47,6 +54,7 @@ def run_market_regime_cycle(
         symbol=clean,
         timeframe_minutes=timeframe_minutes or MARKET_REGIME_TIMEFRAME_MINUTES,
         use_mock=use_mock,
+        context=context,
         regime_hint=regime_hint,
     )
     report = MarketRegimeAgent().analyze(snapshot, symbol=clean)
@@ -57,6 +65,13 @@ def run_market_regime_cycle(
 
 def get_latest_market_regime_report(symbol: str = "NIFTY"):
     clean = normalize_market_symbol(symbol)
+    latest = load_latest_agent_report(
+        MarketRegimeAgent.AGENT_NAME,
+        clean,
+        "MARKET_REGIME_REPORT",
+    )
+    if latest is not None:
+        return latest
     return load_agent_output(f"{MarketRegimeAgent.AGENT_NAME}:{clean}:MARKET_REGIME_REPORT")
 
 

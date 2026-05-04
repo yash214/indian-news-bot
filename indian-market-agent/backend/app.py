@@ -44,9 +44,6 @@ try:
         DEFAULT_APP_STATE,
         DEFAULT_TRACKED_TICKERS,
         DEFAULT_WATCHLIST,
-        FO_AGENT_ENABLED,
-        MACRO_AGENT_ENABLED,
-        MACRO_AGENT_REFRESH_MODE,
         HOLIDAY_CALENDAR_PATH,
         IST,
         MARKET_CLOSE_TIME,
@@ -161,12 +158,6 @@ try:
     )
     from backend.providers.upstox.v3_proto import decode_feed_response
     from backend.providers.upstox.live import build_stream_request, stream_authorize_url, stream_quote_from_feed
-    from backend.agents.fo_structure import FOStructureAgent
-    from backend.agents.fo_structure.snapshot_builder import FOSnapshotBuilder
-    from backend.agents.macro_context import MacroContextAgent
-    from backend.agents.macro_context.snapshot_builder import MacroSnapshotBuilder
-    from backend.agents.macro_context.schedule import get_next_macro_refresh_time, is_macro_refresh_due
-    from backend.providers.india_vix_provider import IndiaVixProvider
     from backend.routes.derivatives_routes import register_derivatives_routes
     from backend.routes.fo_agent_routes import register_fo_agent_routes
     from backend.routes.frontend_routes import register_frontend_routes
@@ -177,8 +168,27 @@ try:
     from backend.routes.news_agent_routes import register_news_agent_routes
     from backend.routes.news_routes import register_news_routes
     from backend.routes.upstox_routes import register_upstox_routes
-    from backend.services import market_regime_runtime
-    from backend.services.runtime_state import AppRuntimeContext
+    from backend.services.fo_runtime import (
+        build_fo_snapshot,
+        fo_runtime_status,
+        get_latest_fo_structure_report,
+        run_fo_structure_cycle,
+    )
+    from backend.services.macro_runtime import (
+        build_macro_snapshot,
+        get_latest_macro_context_report,
+        macro_refresh_due,
+        macro_runtime_status,
+        next_macro_refresh_time,
+        run_macro_context_cycle,
+    )
+    from backend.services.market_regime_runtime import (
+        build_market_regime_snapshot,
+        get_latest_market_regime_report,
+        market_regime_runtime_status,
+        run_market_regime_cycle,
+    )
+    from backend.services.runtime_context import build_runtime_context
     from backend.agents.news.text import (
         build_article_preview,
         clean_headline,
@@ -200,9 +210,6 @@ except ModuleNotFoundError:
         DEFAULT_APP_STATE,
         DEFAULT_TRACKED_TICKERS,
         DEFAULT_WATCHLIST,
-        FO_AGENT_ENABLED,
-        MACRO_AGENT_ENABLED,
-        MACRO_AGENT_REFRESH_MODE,
         HOLIDAY_CALENDAR_PATH,
         IST,
         MARKET_CLOSE_TIME,
@@ -317,12 +324,6 @@ except ModuleNotFoundError:
     )
     from providers.upstox.v3_proto import decode_feed_response
     from providers.upstox.live import build_stream_request, stream_authorize_url, stream_quote_from_feed
-    from agents.fo_structure import FOStructureAgent
-    from agents.fo_structure.snapshot_builder import FOSnapshotBuilder
-    from agents.macro_context import MacroContextAgent
-    from agents.macro_context.snapshot_builder import MacroSnapshotBuilder
-    from agents.macro_context.schedule import get_next_macro_refresh_time, is_macro_refresh_due
-    from providers.india_vix_provider import IndiaVixProvider
     from routes.derivatives_routes import register_derivatives_routes
     from routes.fo_agent_routes import register_fo_agent_routes
     from routes.frontend_routes import register_frontend_routes
@@ -333,8 +334,27 @@ except ModuleNotFoundError:
     from routes.news_agent_routes import register_news_agent_routes
     from routes.news_routes import register_news_routes
     from routes.upstox_routes import register_upstox_routes
-    from services import market_regime_runtime
-    from services.runtime_state import AppRuntimeContext
+    from services.fo_runtime import (
+        build_fo_snapshot,
+        fo_runtime_status,
+        get_latest_fo_structure_report,
+        run_fo_structure_cycle,
+    )
+    from services.macro_runtime import (
+        build_macro_snapshot,
+        get_latest_macro_context_report,
+        macro_refresh_due,
+        macro_runtime_status,
+        next_macro_refresh_time,
+        run_macro_context_cycle,
+    )
+    from services.market_regime_runtime import (
+        build_market_regime_snapshot,
+        get_latest_market_regime_report,
+        market_regime_runtime_status,
+        run_market_regime_cycle,
+    )
+    from services.runtime_context import build_runtime_context
     from agents.news.text import (
         build_article_preview,
         clean_headline,
@@ -510,51 +530,6 @@ def current_india_vix_quote() -> dict | None:
         tick_vix = dict(_ticks.get("VIX") or _ticks.get("India VIX") or {}) if isinstance(_ticks.get("VIX") or _ticks.get("India VIX"), dict) else {}
     payload = index_vix or tick_vix
     return payload or None
-
-
-def build_macro_snapshot(*, use_mock: bool = False):
-    builder = MacroSnapshotBuilder(india_vix_provider=IndiaVixProvider(fetcher=current_india_vix_quote))
-    return builder.build_mock_snapshot() if use_mock else builder.build()
-
-
-def run_macro_context_cycle(*, force_refresh: bool = False, use_mock: bool = False):
-    snapshot = build_macro_snapshot(use_mock=use_mock)
-    report = MacroContextAgent().analyze(snapshot)
-    if force_refresh:
-        print("[*] Macro context refresh forced via API or worker call")
-    return report
-
-
-def run_fo_structure_cycle(symbol: str = "NIFTY", expiry: str | None = None):
-    if not FO_AGENT_ENABLED:
-        return FOStructureAgent().analyze(None, symbol=symbol)
-    snapshot = FOSnapshotBuilder().build(symbol=symbol, expiry=expiry)
-    return FOStructureAgent().analyze(snapshot, symbol=symbol)
-
-
-def build_market_regime_snapshot(symbol: str = "NIFTY", timeframe_minutes: int = 5, use_mock: bool = False):
-    return market_regime_runtime.build_market_regime_snapshot(
-        symbol=symbol,
-        timeframe_minutes=timeframe_minutes,
-        use_mock=use_mock,
-    )
-
-
-def run_market_regime_cycle(symbol: str = "NIFTY", timeframe_minutes: int = 5, force_refresh: bool = False, use_mock: bool = False):
-    return market_regime_runtime.run_market_regime_cycle(
-        symbol=symbol,
-        timeframe_minutes=timeframe_minutes,
-        force_refresh=force_refresh,
-        use_mock=use_mock,
-    )
-
-
-def get_latest_market_regime_report(symbol: str = "NIFTY"):
-    return market_regime_runtime.get_latest_market_regime_report(symbol=symbol)
-
-
-def market_regime_runtime_status() -> dict:
-    return market_regime_runtime.market_regime_runtime_status()
 
 
 def is_market_open() -> bool:
@@ -3324,12 +3299,11 @@ def macro_context_loop() -> None:
     while True:
         try:
             now = ist_now()
-            if MACRO_AGENT_ENABLED and MACRO_AGENT_REFRESH_MODE == "scheduled":
-                if is_macro_refresh_due(now, _last_macro_context_run_at):
-                    run_macro_context_cycle(force_refresh=False, use_mock=False)
-                    _last_macro_context_run_at = now
-                    next_run = get_next_macro_refresh_time(now)
-                    print(f"[~] Macro context refreshed at {now.isoformat()} | next={next_run.isoformat() if next_run else 'n/a'}")
+            if macro_refresh_due(now, _last_macro_context_run_at):
+                run_macro_context_cycle(force_refresh=False, use_mock=False, context=runtime_context)
+                _last_macro_context_run_at = now
+                next_run = next_macro_refresh_time(now)
+                print(f"[~] Macro context refreshed at {now.isoformat()} | next={next_run.isoformat() if next_run else 'n/a'}")
         except Exception as exc:
             print(f"[!] macro_context_loop error: {exc}")
         time.sleep(60)
@@ -3350,7 +3324,21 @@ def global_quote_loop() -> None:
 FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"
 
 app = Flask(__name__, static_folder=str(FRONTEND_DIR), static_url_path="")
-runtime_context = AppRuntimeContext(globals())
+runtime_context = build_runtime_context(
+    current_india_vix_quote=current_india_vix_quote,
+    build_macro_snapshot=build_macro_snapshot,
+    run_macro_context_cycle=run_macro_context_cycle,
+    get_latest_macro_context_report=get_latest_macro_context_report,
+    build_market_regime_snapshot=build_market_regime_snapshot,
+    run_market_regime_cycle=run_market_regime_cycle,
+    get_latest_market_regime_report=get_latest_market_regime_report,
+    build_fo_snapshot=build_fo_snapshot,
+    run_fo_structure_cycle=run_fo_structure_cycle,
+    get_latest_fo_structure_report=get_latest_fo_structure_report,
+    provider_status=market_data_provider_status,
+    upstox_runtime_status=upstox_integration_status,
+    runtime_state=globals(),
+)
 register_frontend_routes(app, runtime_context)
 register_health_routes(app, runtime_context)
 register_news_routes(app, runtime_context)
