@@ -159,6 +159,7 @@ try:
     from backend.providers.upstox.v3_proto import decode_feed_response
     from backend.providers.upstox.live import build_stream_request, stream_authorize_url, stream_quote_from_feed
     from backend.routes.derivatives_routes import register_derivatives_routes
+    from backend.routes.execution_health_routes import register_execution_health_routes
     from backend.routes.fo_agent_routes import register_fo_agent_routes
     from backend.routes.frontend_routes import register_frontend_routes
     from backend.routes.health_routes import register_health_routes
@@ -168,7 +169,7 @@ try:
     from backend.routes.news_agent_routes import register_news_agent_routes
     from backend.routes.news_routes import register_news_routes
     from backend.routes.upstox_routes import register_upstox_routes
-    from backend.services import ai_runtime, analytics_runtime, background_runtime, market_runtime, news_runtime, provider_status, upstox_runtime
+    from backend.services import ai_runtime, analytics_runtime, background_runtime, execution_health_runtime, market_runtime, news_runtime, provider_status, upstox_runtime
     from backend.services.fo_runtime import (
         build_fo_snapshot,
         fo_runtime_status,
@@ -326,6 +327,7 @@ except ModuleNotFoundError:
     from providers.upstox.v3_proto import decode_feed_response
     from providers.upstox.live import build_stream_request, stream_authorize_url, stream_quote_from_feed
     from routes.derivatives_routes import register_derivatives_routes
+    from routes.execution_health_routes import register_execution_health_routes
     from routes.fo_agent_routes import register_fo_agent_routes
     from routes.frontend_routes import register_frontend_routes
     from routes.health_routes import register_health_routes
@@ -335,7 +337,7 @@ except ModuleNotFoundError:
     from routes.news_agent_routes import register_news_agent_routes
     from routes.news_routes import register_news_routes
     from routes.upstox_routes import register_upstox_routes
-    from services import ai_runtime, analytics_runtime, background_runtime, market_runtime, news_runtime, provider_status, upstox_runtime
+    from services import ai_runtime, analytics_runtime, background_runtime, execution_health_runtime, market_runtime, news_runtime, provider_status, upstox_runtime
     from services.fo_runtime import (
         build_fo_snapshot,
         fo_runtime_status,
@@ -920,6 +922,36 @@ def start_background_workers() -> bool:
 
 def background_runtime_status() -> dict:
     return background_runtime.background_runtime_status(context=_runtime_context_or_none())
+
+
+def build_execution_health_snapshot(use_mock: bool = False, scenario: str | None = None):
+    return execution_health_runtime.build_execution_health_snapshot(
+        use_mock=use_mock,
+        context=_runtime_context_or_none(),
+        scenario=scenario,
+    )
+
+
+def run_execution_health_cycle(
+    force_refresh: bool = False,
+    use_mock: bool = False,
+    scenario: str | None = None,
+    context=None,
+):
+    return execution_health_runtime.run_execution_health_cycle(
+        force_refresh=force_refresh,
+        use_mock=use_mock,
+        context=context or _runtime_context_or_none(),
+        scenario=scenario,
+    )
+
+
+def get_latest_execution_health_report():
+    return execution_health_runtime.get_latest_execution_health_report()
+
+
+def execution_health_runtime_status() -> dict:
+    return execution_health_runtime.execution_health_runtime_status()
 
 
 def persist_runtime_news_payload(articles: list[dict], feed_status: dict, updated: str, refreshed_at: float) -> None:
@@ -1520,6 +1552,10 @@ runtime_context = build_runtime_context(
     build_market_regime_snapshot=build_market_regime_snapshot,
     run_market_regime_cycle=run_market_regime_cycle,
     get_latest_market_regime_report=get_latest_market_regime_report,
+    build_execution_health_snapshot=build_execution_health_snapshot,
+    run_execution_health_cycle=run_execution_health_cycle,
+    get_latest_execution_health_report=get_latest_execution_health_report,
+    execution_health_runtime_status=execution_health_runtime_status,
     build_fo_snapshot=build_fo_snapshot,
     run_fo_structure_cycle=run_fo_structure_cycle,
     get_latest_fo_structure_report=get_latest_fo_structure_report,
@@ -1530,7 +1566,12 @@ runtime_context = build_runtime_context(
     set_news_refresh_seconds=set_news_refresh_seconds,
     runtime_news_payload_from_db=runtime_news_payload_from_db,
     persist_runtime_news_payload=persist_runtime_news_payload,
+    news_runtime_status=news_runtime_status,
     generate_ai_chat_response=generate_ai_chat_response,
+    ai_runtime_status=ai_runtime_status,
+    macro_runtime_status=macro_runtime_status,
+    fo_runtime_status=fo_runtime_status,
+    market_regime_runtime_status=market_regime_runtime_status,
     ai_summary_progress_for_articles=ai_summary_progress_for_articles,
     ai_summary_update_payload=ai_summary_update_payload,
     hydrate_article_from_ai_cache=hydrate_article_from_ai_cache,
@@ -1593,6 +1634,7 @@ register_news_agent_routes(app, runtime_context)
 register_macro_agent_routes(app, runtime_context)
 register_fo_agent_routes(app, runtime_context)
 register_market_regime_routes(app, runtime_context)
+register_execution_health_routes(app, runtime_context)
 register_market_routes(app, runtime_context)
 register_derivatives_routes(app, runtime_context)
 register_upstox_routes(app, runtime_context)

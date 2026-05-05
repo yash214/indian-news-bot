@@ -24,6 +24,11 @@ class AppRuntimeContext:
     run_market_regime_cycle: Callable | None = None
     get_latest_market_regime_report: Callable | None = None
 
+    build_execution_health_snapshot: Callable | None = None
+    run_execution_health_cycle: Callable | None = None
+    get_latest_execution_health_report: Callable | None = None
+    execution_health_runtime_status: Callable | None = None
+
     refresh_news_now: Callable | None = None
     get_latest_news_items: Callable | None = None
     fetch_news: Callable | None = None
@@ -33,6 +38,7 @@ class AppRuntimeContext:
     persist_runtime_news_payload: Callable | None = None
     run_news_agent_report: Callable | None = None
     get_latest_news_agent_report: Callable | None = None
+    news_runtime_status: Callable | None = None
 
     generate_ai_chat_response: Callable | None = None
     ai_summary_progress_for_articles: Callable | None = None
@@ -45,6 +51,10 @@ class AppRuntimeContext:
     build_market_analytics_payload: Callable | None = None
     build_derivatives_analysis_payload: Callable | None = None
     analytics_runtime_status: Callable | None = None
+    ai_runtime_status: Callable | None = None
+    macro_runtime_status: Callable | None = None
+    fo_runtime_status: Callable | None = None
+    market_regime_runtime_status: Callable | None = None
 
     get_tickers_snapshot: Callable | None = None
     get_price_history: Callable | None = None

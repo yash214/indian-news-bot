@@ -151,11 +151,30 @@ curl "http://127.0.0.1:9090/api/agents/market-regime?symbol=NIFTY&mock=true"
 curl "http://127.0.0.1:9090/api/agents/market-regime?symbol=SENSEX&mock=true"
 ```
 
+## Execution Health Agent
+
+The Execution Health Agent is a deterministic, system-level gate for future strategy evaluation and trade proposal layers. It checks latest agent report freshness, market data freshness, provider/runtime health, Upstox status, F&O/option-chain freshness signals, and market session context when available.
+
+It does not predict direction, generate trades, approve risk, place orders, or execute broker actions. In v1, `allow_live_execution` is always `false`.
+
+The report includes `overall_health`, `trade_allowed`, `fresh_trade_blocked`, `health_score`, blockers, warnings, provider status, agent freshness, runtime status, and strategy-engine guidance. Critical stale F&O or Market Regime data blocks fresh trade proposals; optional provider failures degrade confidence without automatically blocking.
+
+API endpoint:
+
+- `GET /api/agents/execution-health`
+- Query params: `mock=true|false`, `scenario=healthy|degraded|unhealthy|startup`
+
+Useful local check:
+
+```bash
+curl "http://127.0.0.1:9090/api/agents/execution-health?mock=true"
+```
+
 ## Agent Output Storage
 
 Agent reports keep the existing latest-report cache in `app_state` using keys such as `agent_output:market_regime_agent:NIFTY:MARKET_REGIME_REPORT`, so dashboard/runtime lookups remain compatible. Each structured agent report is also inserted into the generic `agent_outputs` table for historical debugging, audit trails, backtesting, outcome tracking, and future learning.
 
-The history layer currently covers News, Macro Context, F&O Structure, Market Regime, and future agents that call `save_agent_report()`. Schema scaffolding is also present for later learning phases: `agent_outcomes`, `error_analysis`, `tuning_suggestions`, `ruleset_versions`, and `audit_logs`.
+The history layer currently covers News, Macro Context, F&O Structure, Market Regime, Execution Health, and future agents that call `save_agent_report()`. Schema scaffolding is also present for later learning phases: `agent_outcomes`, `error_analysis`, `tuning_suggestions`, `ruleset_versions`, and `audit_logs`.
 
 ## Lightsail Deployment
 
