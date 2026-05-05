@@ -17,8 +17,10 @@ os.environ.setdefault("MARKET_DESK_DISABLE_THREADS", "1")
 
 try:
     from backend import app as market_app
+    from backend.services import background_runtime
 except ModuleNotFoundError:
     import app as market_app
+    from services import background_runtime
 
 
 STOP_EVENT = threading.Event()
@@ -32,12 +34,16 @@ def main() -> int:
     signal.signal(signal.SIGINT, _handle_stop)
     signal.signal(signal.SIGTERM, _handle_stop)
 
-    market_app.initialize_runtime_state()
+    context = getattr(market_app, "runtime_context", None)
+    background_runtime.initialize_runtime_state(context=context)
+    upstox_stream_loop = getattr(context, "upstox_stream_loop", None) if context is not None else None
+    if not callable(upstox_stream_loop):
+        upstox_stream_loop = market_app.upstox_stream_loop
     workers = [
-        ("market-desk-refresh", market_app.refresh_loop),
-        ("market-desk-ticker", market_app.ticker_loop),
-        ("market-desk-upstox-v3", market_app.upstox_stream_loop),
-        ("market-desk-macro-context", market_app.macro_context_loop),
+        ("market-desk-refresh", lambda: background_runtime.refresh_loop(context=context)),
+        ("market-desk-ticker", lambda: background_runtime.ticker_loop(context=context)),
+        ("market-desk-upstox-v3", upstox_stream_loop),
+        ("market-desk-macro-context", lambda: background_runtime.macro_context_loop(context=context)),
     ]
     for name, target in workers:
         threading.Thread(target=target, daemon=True, name=name).start()

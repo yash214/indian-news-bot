@@ -18,7 +18,7 @@ def register_news_routes(app, context) -> None:
                     "articles": articles,
                     "updated": runtime_payload.get("updated") or "",
                     "feedStatus": runtime_payload.get("feedStatus") if isinstance(runtime_payload.get("feedStatus"), dict) else {},
-                    "refreshInterval": context._news_refresh_seconds,
+                    "refreshInterval": context.get_news_refresh_seconds(),
                     "allowedRefreshWindows": context.ALLOWED_REFRESH_WINDOWS,
                     "marketStatus": context.get_market_status(),
                     "aiSummaryProgress": runtime_payload.get("aiSummaryProgress") or context.ai_summary_progress_for_articles(articles),
@@ -30,7 +30,7 @@ def register_news_routes(app, context) -> None:
                 "articles": articles,
                 "updated": context._updated,
                 "feedStatus": dict(context._feed_status),
-                "refreshInterval": context._news_refresh_seconds,
+                "refreshInterval": context.get_news_refresh_seconds(),
                 "allowedRefreshWindows": context.ALLOWED_REFRESH_WINDOWS,
             }
         payload["marketStatus"] = context.get_market_status()
