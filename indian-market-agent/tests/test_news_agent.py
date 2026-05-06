@@ -1,10 +1,12 @@
 import importlib.util
+import os
 import tempfile
 import time
 import unittest
 from pathlib import Path
 from unittest import mock
 
+from backend.core import settings
 from backend.agents.news.agent import NewsIntelligenceAgent
 from backend.agents.news.report_aggregator import NewsReportAggregator
 from backend.agents.news.report_store import load_recent_article_ai_analyses, save_article_ai_analysis
@@ -183,6 +185,14 @@ class NewsAgentTests(unittest.TestCase):
         self.assertEqual(loaded[0].article_id, "stored")
         self.assertEqual(loaded[0].macro_tags, ["GLOBAL_CUES"])
 
+    def test_news_agent_lookback_setting_default_and_invalid_env(self):
+        with mock.patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(settings.env_int("NEWS_AGENT_LOOKBACK_HOURS", 24, min_value=1, max_value=168), 24)
+        with mock.patch.dict(os.environ, {"NEWS_AGENT_LOOKBACK_HOURS": "bad"}, clear=False):
+            self.assertEqual(settings.env_int("NEWS_AGENT_LOOKBACK_HOURS", 24, min_value=1, max_value=168), 24)
+        with mock.patch.dict(os.environ, {"NEWS_AGENT_LOOKBACK_HOURS": "999"}, clear=False):
+            self.assertEqual(settings.env_int("NEWS_AGENT_LOOKBACK_HOURS", 24, min_value=1, max_value=168), 168)
+
     def test_news_agent_report_endpoint_returns_valid_json(self):
         analysis = article_analysis("api", "bearish", 8, 0.8, tags=["CRUDE"])
         with mock.patch.object(app, "load_recent_article_ai_analyses", return_value=[analysis]):
@@ -197,6 +207,39 @@ class NewsAgentTests(unittest.TestCase):
         self.assertIn(payload["overall_sentiment"], {"BEARISH", "MIXED_BEARISH"})
         self.assertIn("strategy_engine_guidance", payload)
         save_report.assert_called_once()
+
+    def test_news_agent_report_endpoint_uses_default_lookback_when_missing(self):
+        with mock.patch.object(app, "load_recent_article_ai_analyses", return_value=[]) as load_analyses:
+            with mock.patch.object(app, "save_index_news_report"):
+                with app.app.test_client() as client:
+                    response = client.get("/api/news/agent/report?index=NIFTY")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertEqual(payload["lookback_hours"], 24)
+        load_analyses.assert_called_once_with(lookback_hours=24)
+
+    def test_news_agent_report_endpoint_explicit_lookback_overrides_default(self):
+        with mock.patch.object(app, "load_recent_article_ai_analyses", return_value=[]) as load_analyses:
+            with mock.patch.object(app, "save_index_news_report"):
+                with app.app.test_client() as client:
+                    response = client.get("/api/news/agent/report?index=NIFTY&lookback_hours=6")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertEqual(payload["lookback_hours"], 6)
+        load_analyses.assert_called_once_with(lookback_hours=6)
+
+    def test_news_agent_articles_endpoint_invalid_lookback_uses_default(self):
+        with mock.patch.object(app, "load_recent_article_ai_analyses", return_value=[]) as load_analyses:
+            with app.app.test_client() as client:
+                response = client.get("/api/news/agent/articles?lookback_hours=bad")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertEqual(payload["lookback_hours"], 24)
+        self.assertEqual(payload["articles"], [])
+        load_analyses.assert_called_once_with(lookback_hours=24)
 
 
 if __name__ == "__main__":

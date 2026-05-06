@@ -158,6 +158,7 @@ try:
     )
     from backend.providers.upstox.v3_proto import decode_feed_response
     from backend.providers.upstox.live import build_stream_request, stream_authorize_url, stream_quote_from_feed
+    from backend.routes.chart_routes import register_chart_routes
     from backend.routes.derivatives_routes import register_derivatives_routes
     from backend.routes.execution_health_routes import register_execution_health_routes
     from backend.routes.fo_agent_routes import register_fo_agent_routes
@@ -169,7 +170,7 @@ try:
     from backend.routes.news_agent_routes import register_news_agent_routes
     from backend.routes.news_routes import register_news_routes
     from backend.routes.upstox_routes import register_upstox_routes
-    from backend.services import ai_runtime, analytics_runtime, background_runtime, execution_health_runtime, market_runtime, news_runtime, provider_status, upstox_runtime
+    from backend.services import ai_runtime, analytics_runtime, background_runtime, chart_runtime, execution_health_runtime, market_runtime, news_runtime, provider_status, upstox_runtime
     from backend.services.fo_runtime import (
         build_fo_snapshot,
         fo_runtime_status,
@@ -326,6 +327,7 @@ except ModuleNotFoundError:
     )
     from providers.upstox.v3_proto import decode_feed_response
     from providers.upstox.live import build_stream_request, stream_authorize_url, stream_quote_from_feed
+    from routes.chart_routes import register_chart_routes
     from routes.derivatives_routes import register_derivatives_routes
     from routes.execution_health_routes import register_execution_health_routes
     from routes.fo_agent_routes import register_fo_agent_routes
@@ -337,7 +339,7 @@ except ModuleNotFoundError:
     from routes.news_agent_routes import register_news_agent_routes
     from routes.news_routes import register_news_routes
     from routes.upstox_routes import register_upstox_routes
-    from services import ai_runtime, analytics_runtime, background_runtime, execution_health_runtime, market_runtime, news_runtime, provider_status, upstox_runtime
+    from services import ai_runtime, analytics_runtime, background_runtime, chart_runtime, execution_health_runtime, market_runtime, news_runtime, provider_status, upstox_runtime
     from services.fo_runtime import (
         build_fo_snapshot,
         fo_runtime_status,
@@ -954,6 +956,44 @@ def execution_health_runtime_status() -> dict:
     return execution_health_runtime.execution_health_runtime_status()
 
 
+def get_chart_candles(
+    symbol: str = "NIFTY",
+    interval: str = "5m",
+    range_: str = "1d",
+    use_mock: bool = False,
+    context=None,
+) -> dict:
+    return chart_runtime.get_chart_candles(
+        symbol=symbol,
+        interval=interval,
+        range_=range_,
+        use_mock=use_mock,
+        context=context or _runtime_context_or_none(),
+    )
+
+
+def get_chart_overlays(
+    symbol: str = "NIFTY",
+    interval: str = "5m",
+    use_mock: bool = False,
+    context=None,
+) -> dict:
+    return chart_runtime.get_chart_overlays(
+        symbol=symbol,
+        interval=interval,
+        use_mock=use_mock,
+        context=context or _runtime_context_or_none(),
+    )
+
+
+def get_workspace_summary(symbol: str = "NIFTY", use_mock: bool = False, context=None) -> dict:
+    return chart_runtime.get_workspace_summary(
+        symbol=symbol,
+        use_mock=use_mock,
+        context=context or _runtime_context_or_none(),
+    )
+
+
 def persist_runtime_news_payload(articles: list[dict], feed_status: dict, updated: str, refreshed_at: float) -> None:
     news_runtime.persist_runtime_news_payload(articles, feed_status, updated, refreshed_at, context=_runtime_context_or_none())
 
@@ -1556,6 +1596,9 @@ runtime_context = build_runtime_context(
     run_execution_health_cycle=run_execution_health_cycle,
     get_latest_execution_health_report=get_latest_execution_health_report,
     execution_health_runtime_status=execution_health_runtime_status,
+    get_chart_candles=get_chart_candles,
+    get_chart_overlays=get_chart_overlays,
+    get_workspace_summary=get_workspace_summary,
     build_fo_snapshot=build_fo_snapshot,
     run_fo_structure_cycle=run_fo_structure_cycle,
     get_latest_fo_structure_report=get_latest_fo_structure_report,
@@ -1635,6 +1678,7 @@ register_macro_agent_routes(app, runtime_context)
 register_fo_agent_routes(app, runtime_context)
 register_market_regime_routes(app, runtime_context)
 register_execution_health_routes(app, runtime_context)
+register_chart_routes(app, runtime_context)
 register_market_routes(app, runtime_context)
 register_derivatives_routes(app, runtime_context)
 register_upstox_routes(app, runtime_context)

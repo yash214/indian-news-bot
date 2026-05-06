@@ -51,6 +51,22 @@ Production-friendly Upstox endpoints:
 
 - `GET /api/integrations/upstox/status`
 
+## Trading Workspace UI
+
+The Trading Workspace is available at:
+
+- `GET /workspace`
+
+It is a dark terminal-style view with a collapsible left sidebar, backend-powered Lightweight Charts canvas, collapsible agent insights drawer, and bottom terminal panel for P&L, open positions, strategies, agent signals, audit log, and orders.
+
+Chart rendering uses TradingView Lightweight Charts as the frontend rendering library only. Market data comes from this backend through:
+
+- `GET /api/chart/candles`
+- `GET /api/chart/overlays`
+- `GET /api/workspace/summary`
+
+The chart API uses mock data when requested, runtime price history when available, and read-only Upstox candle data if configured. It does not fetch data from TradingView. Strategy suggestions in v1 are placeholders or derived display hints, require manual approval, and do not place orders. No live execution exists in this workspace phase.
+
 ## Macro Context Agent
 
 The Macro Context Agent is a deterministic, rule-based layer that turns macro variables into a structured market-context report for India-focused index workflows. It does not produce buy/sell calls or place orders. Instead, it classifies whether the macro backdrop is supportive, mixed, bearish, or event-risk heavy, then maps that into trade filters and strategy-engine guidance such as reducing long confidence, reducing short confidence, waiting for event risk, or blocking fresh trades during extreme macro shock.

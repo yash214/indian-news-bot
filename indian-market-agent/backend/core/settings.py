@@ -53,6 +53,19 @@ def _env_time(name: str, default: str) -> dt_time:
     return dt_time(hour=hour, minute=minute)
 
 
+def env_int(name: str, default: int, min_value: int | None = None, max_value: int | None = None) -> int:
+    raw = os.environ.get(name)
+    try:
+        value = int(raw) if raw not in (None, "") else int(default)
+    except (TypeError, ValueError):
+        return int(default)
+    if min_value is not None and value < min_value:
+        return int(default)
+    if max_value is not None and value > max_value:
+        return int(max_value)
+    return value
+
+
 FMP_ENABLED = _env_bool("FMP_ENABLED", False)
 FMP_TIMEOUT_SECONDS = int(os.environ.get("FMP_TIMEOUT_SECONDS", "8") or 8)
 FMP_CACHE_TTL_SECONDS = int(os.environ.get("FMP_CACHE_TTL_SECONDS", "3600") or 3600)
@@ -99,3 +112,6 @@ MARKET_REGIME_AGENT_ENABLED = _env_bool("MARKET_REGIME_AGENT_ENABLED", True)
 MARKET_REGIME_REFRESH_SECONDS = int(os.environ.get("MARKET_REGIME_REFRESH_SECONDS", "300") or 300)
 MARKET_REGIME_TIMEFRAME_MINUTES = int(os.environ.get("MARKET_REGIME_TIMEFRAME_MINUTES", "5") or 5)
 MARKET_REGIME_TIMEZONE = (os.environ.get("MARKET_REGIME_TIMEZONE", "Asia/Kolkata") or "Asia/Kolkata").strip()
+
+# Controls how many hours of articles the News Agent includes in index-level report generation.
+NEWS_AGENT_LOOKBACK_HOURS = env_int("NEWS_AGENT_LOOKBACK_HOURS", 24, min_value=1, max_value=168)

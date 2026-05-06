@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Indian Market Agent - Trading Workspace</title>
+<link rel="stylesheet" href="/assets/workspace.css">
+</head>
+<body class="workspace-body">
+<div class="workspace-shell">
+  <aside class="workspace-sidebar" id="workspace-sidebar">
+    <div class="sidebar-head">
+      <div class="brand-mark">IMA</div>
+      <div class="brand-copy">
+        <div>Indian Market Agent</div>
+        <span>Trading Workspace</span>
+      </div>
+      <button class="icon-button" id="sidebar-toggle" title="Collapse sidebar" aria-label="Collapse sidebar">‹</button>
+    </div>
+    <nav class="workspace-nav" id="workspace-nav">
+      <button class="nav-item active" data-panel="watchlist"><span>Watchlist</span></button>
+      <button class="nav-item" data-panel="agents"><span>Agents</span></button>
+      <button class="nav-item" data-panel="news"><span>News</span></button>
+      <button class="nav-item" data-panel="macro"><span>Macro</span></button>
+      <button class="nav-item" data-panel="fo"><span>F&O</span></button>
+      <button class="nav-item" data-panel="execution"><span>Execution Health</span></button>
+      <button class="nav-item" data-panel="risk"><span>Risk</span></button>
+      <button class="nav-item" data-panel="strategies"><span>Strategies</span></button>
+      <button class="nav-item" data-panel="orders"><span>Orders</span></button>
+      <button class="nav-item" data-panel="journal"><span>Journal</span></button>
+    </nav>
+    <div class="sidebar-panel" id="sidebar-panel">
+      <div class="panel-kicker">Selected</div>
+      <div class="panel-title" id="sidebar-selection">Watchlist</div>
+      <div class="mini-list" id="sidebar-watchlist"></div>
+    </div>
+  </aside>
+
+  <main class="workspace-main">
+    <header class="workspace-topbar">
+      <div class="title-block">
+        <h1>Trading Workspace</h1>
+        <span>Backend market data, agent context, manual approval only</span>
+      </div>
+      <div class="market-strip" id="market-strip"></div>
+      <div class="status-cluster">
+        <span class="status-chip" id="system-health-chip">System Health: --</span>
+        <span class="status-chip" id="proposal-chip">Trade Proposal: --</span>
+      </div>
+    </header>
+
+    <section class="workspace-content">
+      <section class="chart-column">
+        <div class="chart-toolbar">
+          <div class="segmented" id="symbol-tabs">
+            <button class="active" data-symbol="NIFTY">NIFTY</button>
+            <button data-symbol="SENSEX">SENSEX</button>
+          </div>
+          <div class="segmented" id="interval-tabs">
+            <button data-interval="1m">1m</button>
+            <button class="active" data-interval="5m">5m</button>
+            <button data-interval="15m">15m</button>
+            <button data-interval="1d">1D</button>
+          </div>
+          <button class="ghost-button" id="mock-toggle">Mock: Off</button>
+          <button class="primary-button" id="refresh-workspace">Refresh</button>
+        </div>
+        <div class="chart-wrap">
+          <div id="chart-status" class="chart-status">Loading chart...</div>
+          <div id="main-chart"></div>
+        </div>
+        <div class="chart-attribution">Charts rendered with TradingView Lightweight Charts. Market data is served by this backend.</div>
+      </section>
+
+      <aside class="insights-drawer" id="insights-drawer">
+        <div class="drawer-head">
+          <div>
+            <div class="panel-kicker" id="drawer-kicker">Agent Insights</div>
+            <div class="panel-title" id="drawer-title">Live Context</div>
+          </div>
+          <button class="icon-button" id="drawer-toggle" title="Collapse insights" aria-label="Collapse insights">›</button>
+        </div>
+        <div class="agent-card-grid" id="right-drawer-content"></div>
+      </aside>
+    </section>
+
+    <section class="terminal-panel">
+      <div class="terminal-tabs" id="terminal-tabs">
+        <button class="active" data-tab="pnl">P&L</button>
+        <button data-tab="positions">Open Positions</button>
+        <button data-tab="strategies">Strategies</button>
+        <button data-tab="signals">Agent Signals</button>
+        <button data-tab="audit">Audit Log</button>
+        <button data-tab="orders">Orders</button>
+      </div>
+      <div class="terminal-body" id="terminal-body"></div>
+    </section>
+  </main>
+</div>
+<script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
+<script src="/assets/workspace.js"></script>
+</body>
+</html>

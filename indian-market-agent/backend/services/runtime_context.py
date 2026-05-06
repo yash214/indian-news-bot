@@ -29,6 +29,10 @@ class AppRuntimeContext:
     get_latest_execution_health_report: Callable | None = None
     execution_health_runtime_status: Callable | None = None
 
+    get_chart_candles: Callable | None = None
+    get_chart_overlays: Callable | None = None
+    get_workspace_summary: Callable | None = None
+
     refresh_news_now: Callable | None = None
     get_latest_news_items: Callable | None = None
     fetch_news: Callable | None = None
